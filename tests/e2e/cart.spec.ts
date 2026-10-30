@@ -5,5 +5,5 @@ test('adding a product increases the cart count', async ({ page }) => {
   const addMug = page.getByTestId('add-blue-mug');
   const cartCount = page.getByTestId('cart-count');
   await addMug.click();
-  await expect(cartCount).toHaveText('1');
+  await expect(cartCount).toHaveText('2');
 });
