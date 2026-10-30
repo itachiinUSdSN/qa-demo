@@ -1,0 +1,7 @@
+{
+  "products": [
+    { "name": "Blue mug", "testId": "add-blue-mug" },
+    { "name": "Red pen", "testId": "add-red-pen" },
+    { "name": "Green notebook", "testId": "add-green-notebook" }
+  ]
+}
