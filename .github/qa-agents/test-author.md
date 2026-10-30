@@ -14,6 +14,7 @@ Where tests go
 - API: pytest, tests/api/test_*.py, using the `client` fixture from tests/api/conftest.py.
 - E2E: Playwright TypeScript, tests/e2e/*.spec.ts, `import { test, expect } from '@playwright/test'`.
   Use @axe-core/playwright for an accessibility check when a test covers a whole page.
+- Mobile: Maestro YAML flows, tests/mobile/<name>.yaml (see tests/mobile/README.md). Select by id or visible text.
 
 Run what you wrote: `pytest tests/api -q` and/or `npx playwright test -c tests/e2e`.
 

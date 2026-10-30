@@ -2,10 +2,12 @@ name: Tests
 
 on:
   push:
+    # W5 stores persona screenshots on this branch; they are not code.
+    branches-ignore: [qa-artifacts]
   workflow_dispatch:
     inputs:
       suite:
-        description: "api, e2e or all"
+        description: "api, e2e, mobile or all"
         default: all
       reason:
         description: "Why this run: manual or nightly (nightly locator failures go to the Healer)"
@@ -54,10 +56,36 @@ jobs:
           npx playwright install --with-deps chromium
           npx playwright test -c tests/e2e 2>&1 | tee results/e2e.log
 
+      # Mobile: Maestro flows run on an Android emulator against a staging build
+      # downloaded from the repo variable STAGING_APK_URL.
+      - name: Mobile setup
+        id: mobile_setup
+        if: hashFiles('tests/mobile/**/*.yaml') != '' && vars.STAGING_APK_URL != '' && contains(fromJSON('["all", "mobile"]'), inputs.suite || 'all')
+        env:
+          STAGING_APK_URL: ${{ vars.STAGING_APK_URL }}
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          curl -fsSL "$STAGING_APK_URL" -o app.apk
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Mobile tests (Maestro)
+        id: mobile
+        if: steps.mobile_setup.outcome == 'success'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          script: |
+            adb install -r app.apk
+            bash -o pipefail -c 'maestro test tests/mobile --format junit --output results/mobile.xml 2>&1 | tee results/mobile.log'
+
       - name: Report
         if: always()
         env:
-          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }}
+          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }} ${{ steps.mobile.outcome }}
           DIFF_URL: ${{ github.event.compare || format('{0}/{1}/commit/{2}', github.server_url, github.repository, github.sha) }}
           REASON: ${{ inputs.reason || github.event_name }}
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
@@ -91,5 +119,5 @@ jobs:
           fi
 
       - name: Fail if any suite failed
-        if: contains(format('{0} {1} {2}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome), 'failure')
+        if: contains(format('{0} {1} {2} {3}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome, steps.mobile.outcome), 'failure')
         run: exit 1
