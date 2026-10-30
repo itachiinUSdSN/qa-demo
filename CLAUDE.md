@@ -9,5 +9,5 @@
 - Test data from tests/fixtures only. Locators and test ids stay in the test file, never in fixtures.
 - One test = one behaviour. No helpers until the third copy.
 - Done = runner output shows green; paste the summary in the PR.
-- Tests run against STAGING_URL only. Never a production URL, never real customer data.
+- Tests run against STAGING_URL (and STAGING_API_URL for the API) only. Never a production URL, never real customer data.
 <!-- qa-agents:end -->

@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: "api, e2e, mobile or all"
+        description: "api, e2e, mobile or all; load or capacity (on demand only)"
         default: all
       reason:
         description: "Why this run: manual or nightly (nightly locator failures go to the Healer)"
         default: manual
 
-# Suites run against the app's staging deployment (repo variable STAGING_URL).
+# Suites run against the app's staging deployment (repo variable STAGING_URL;
+# STAGING_API_URL too if the API is on another host).
 # A suite runs only if its folder has tests. Results go to n8n if
 # N8N_WEBHOOK_URL is set; without it the job still passes or fails normally.
 jobs:
@@ -26,6 +27,7 @@ jobs:
         shell: bash
     env:
       STAGING_URL: ${{ vars.STAGING_URL }}
+      STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +47,7 @@ jobs:
         continue-on-error: true
         run: |
           pip install schemathesis
-          schemathesis run "$STAGING_URL/openapi.json" 2>&1 | tee results/schema.log
+          schemathesis run "$STAGING_API_URL/openapi.json" 2>&1 | tee results/schema.log
 
       - name: E2E tests
         id: e2e
@@ -82,10 +84,37 @@ jobs:
             adb install -r app.apk
             bash -o pipefail -c 'maestro test tests/mobile --format junit --output results/mobile.xml 2>&1 | tee results/mobile.log'
 
+      # Load: k6 scripts in tests/load/, only when asked for (never on push or in "all").
+      #   load:     light regression gate against staging, fixed at 10 virtual users for 1 minute.
+      #   capacity: ramp to 300 virtual users to find the breaking point, only against
+      #             LOAD_CAPACITY_URL, which must not be staging (it shares a box with other apps).
+      - name: Set up k6
+        if: hashFiles('tests/load/*.js') != '' && contains(fromJSON('["load", "capacity"]'), inputs.suite)
+        uses: grafana/setup-k6-action@v1
+
+      - name: Load tests (k6)
+        id: load
+        if: hashFiles('tests/load/*.js') != '' && contains(fromJSON('["load", "capacity"]'), inputs.suite)
+        continue-on-error: true
+        env:
+          SUITE: ${{ inputs.suite }}
+          LOAD_CAPACITY_URL: ${{ vars.LOAD_CAPACITY_URL }}
+        run: |
+          if [ "$SUITE" = capacity ]; then
+            case "$LOAD_CAPACITY_URL" in
+              "" | "$STAGING_URL"* | "$STAGING_API_URL"*)
+                echo "::error::capacity runs need LOAD_CAPACITY_URL set to a box that is not staging"; exit 1;;
+            esac
+            export BASE_URL="$LOAD_CAPACITY_URL"; shape=(--stage 2m:50 --stage 5m:300 --stage 1m:0)
+          else
+            export BASE_URL="$STAGING_API_URL"; shape=(--vus 10 --duration 1m)
+          fi
+          { rc=0; for f in tests/load/*.js; do k6 run "${shape[@]}" "$f" || rc=1; done; exit $rc; } 2>&1 | tee results/load.log
+
       - name: Report
         if: always()
         env:
-          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }} ${{ steps.mobile.outcome }}
+          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }} ${{ steps.mobile.outcome }} ${{ steps.load.outcome }}
           DIFF_URL: ${{ github.event.compare || format('{0}/{1}/commit/{2}', github.server_url, github.repository, github.sha) }}
           REASON: ${{ inputs.reason || github.event_name }}
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
@@ -119,5 +148,5 @@ jobs:
           fi
 
       - name: Fail if any suite failed
-        if: contains(format('{0} {1} {2} {3}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome, steps.mobile.outcome), 'failure')
+        if: contains(format('{0} {1} {2} {3} {4}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome, steps.mobile.outcome, steps.load.outcome), 'failure')
         run: exit 1

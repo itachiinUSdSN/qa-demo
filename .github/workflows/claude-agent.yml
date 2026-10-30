@@ -3,6 +3,7 @@ name: Claude agent
 # Runs Claude Code headless as one of the agents in .github/qa-agents/ and opens a PR.
 #   issue labelled needs-tests -> Test Author writes tests for the acceptance criteria
 #   issue labelled bug         -> Test Author writes the smallest failing repro (no fix)
+#   issue labelled load-test   -> Load Test Author writes k6 scripts under tests/load/
 #   dispatch agent=healer      -> Healer fixes locators in one failing test (sent by n8n)
 # The agent may only write under tests/ (enforced by its tool rules and re-checked below).
 # PRs are pushed with QA_BOT_TOKEN, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN
@@ -23,7 +24,7 @@ on:
 
 jobs:
   agent:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tests' || github.event.label.name == 'bug'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tests' || github.event.label.name == 'bug' || github.event.label.name == 'load-test'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Explicit shell: bash adds pipefail. The default (bash -e) does not, so
@@ -33,6 +34,7 @@ jobs:
         shell: bash
     env:
       STAGING_URL: ${{ vars.STAGING_URL }}
+      STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
       MAX_TURNS: "40"
       MODEL: claude-sonnet-5-5
     steps:
@@ -66,12 +68,19 @@ jobs:
             case "$TEST_FILE" in tests/*) ;; *) echo "::error::test_file must be under tests/"; exit 1;; esac
             printf 'Failing test file: %s\n\nFailures:\n%s\n' "$TEST_FILE" "$FAILURES" > .qa/task.md
             { echo "agent=healer"; echo "branch=qa/healer-$RUN_ID"; echo "title=heal: $TEST_FILE"; } >> "$GITHUB_OUTPUT"
+          elif [ "$LABEL" = load-test ]; then
+            printf 'Issue #%s: %s\n\n%s\n' "$ISSUE" "$ISSUE_TITLE" "$ISSUE_BODY" > .qa/task.md
+            { echo "agent=load-tester"; echo "branch=qa/load-issue-$ISSUE"; echo "title=load: $ISSUE_TITLE (#$ISSUE)"; } >> "$GITHUB_OUTPUT"
           else
             mode=story; prefix=tests; title="tests: $ISSUE_TITLE (#$ISSUE)"
             if [ "$LABEL" = bug ]; then mode=bug; prefix=repro; title="repro: #$ISSUE $ISSUE_TITLE"; fi
             printf 'Mode: %s\n\nIssue #%s: %s\n\n%s\n' "$mode" "$ISSUE" "$ISSUE_TITLE" "$ISSUE_BODY" > .qa/task.md
             { echo "agent=test-author"; echo "branch=qa/$prefix-issue-$ISSUE"; echo "title=$title"; } >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Set up k6
+        if: steps.task.outputs.agent == 'load-tester'
+        uses: grafana/setup-k6-action@v1
 
       - name: Run the agent
         env:
@@ -80,13 +89,17 @@ jobs:
           TEST_FILE: ${{ inputs.test_file }}
         run: |
           # --setting-sources local: ignore any .claude/settings.json in the repo,
-          # so nothing can widen the tool rules below.
-          if [ "$AGENT" = healer ]; then edit=("Edit($TEST_FILE)"); else edit=("Write(tests/**)" "Edit(tests/**)"); fi
+          # so nothing can widen the tool rules below. Edit(path) rules also cover writing new files.
+          case "$AGENT" in
+            healer) edit=("Edit($TEST_FILE)");;
+            load-tester) edit=("Edit(tests/load/**)" "Bash(.github/qa-agents/k6-smoke.sh *)");;
+            *) edit=("Edit(tests/**)");;
+          esac
           claude -p "$(cat .qa/task.md)" \
             --model "$MODEL" --max-turns "$MAX_TURNS" \
             --permission-mode default --setting-sources local \
             --append-system-prompt-file ".github/qa-agents/$AGENT.md" \
-            --allowedTools Read Glob Grep "Write(.qa/**)" "Edit(.qa/**)" "${edit[@]}" \
+            --allowedTools Read Glob Grep "Edit(.qa/**)" "${edit[@]}" \
               "Bash(pytest *)" "Bash(npx playwright test *)" \
             | tee .qa/agent.log
 
@@ -106,9 +119,24 @@ jobs:
           if [ "$AGENT" = healer ] && [ -n "$others" ]; then
             echo "::error::Healer changed a file other than $TEST_FILE: $others"; exit 1
           fi
+          notload=$(echo "$changed" | grep -v '^tests/load/' || true)
+          if [ "$AGENT" = load-tester ] && [ -n "$notload" ]; then
+            echo "::error::Load Test Author changed files outside tests/load/: $notload"; exit 1
+          fi
           echo "any=$([ -n "$changed" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
           [ -s .qa/pr-body.md ] || echo "(The agent did not write a summary; see the run log.)" > .qa/pr-body.md
           cat .qa/pr-body.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Without this, an agent that stopped to ask a question ends as a silent green run.
+      - name: Explain on the issue why there is no PR
+        if: steps.diff.outputs.any == 'no' && github.event.issue.number
+        env:
+          GH_TOKEN: ${{ secrets.QA_BOT_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          { echo "The agent made no changes, so there is no PR. Its last words:"; echo; tail -c 3000 .qa/agent.log; echo; echo "Agent run: $RUN_URL"; } > .qa/comment.md
+          gh issue comment "$ISSUE" --body-file .qa/comment.md
 
       - name: Open the PR
         if: steps.diff.outputs.any == 'yes'
