@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QA Demo Shop</title>
+</head>
+<body>
+  <main>
+    <h1>QA Demo Shop</h1>
+    <p>Throwaway demo for the qa-agents platform. All data is made up.</p>
+    <p>Cart: <span data-testid="cart-count">0</span> items</p>
+    <ul aria-label="Products">
+      <li>Blue mug <button data-testid="add-blue-mug">Add to cart</button></li>
+      <li>Red pen <button data-testid="add-red-pen">Add to cart</button></li>
+      <li>Green notebook <button data-testid="add-green-notebook">Add to cart</button></li>
+    </ul>
+  </main>
+  <script>
+    const count = document.querySelector('[data-testid="cart-count"]');
+    document.querySelectorAll('ul button').forEach(b =>
+      b.addEventListener('click', () => { count.textContent = Number(count.textContent) + 1; }));
+  </script>
+</body>
+</html>

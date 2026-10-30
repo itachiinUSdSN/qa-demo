@@ -1,0 +1,33 @@
+name: Healer guard
+
+# A Healer PR may change locators and waits in exactly one test file, never an assertion.
+on:
+  pull_request:
+
+jobs:
+  guard:
+    if: startsWith(github.head_ref, 'qa/healer-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Exactly one test file changed
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          files=$(git diff --name-only "origin/$BASE...HEAD")
+          echo "$files"
+          if [ "$(echo "$files" | wc -l)" -ne 1 ] || [[ "$files" != tests/* ]]; then
+            echo "::error::A Healer PR must change exactly one file under tests/"; exit 1
+          fi
+
+      - name: No assertion line changed
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff -U0 "origin/$BASE...HEAD" | grep -vE '^(\+\+\+|---) ' | grep -E '^[+-]' | grep -E 'expect\(|assert'; then
+            echo "::error::A Healer PR may not change an expect( or assert line"; exit 1
+          fi
+          echo "No assertion lines changed."

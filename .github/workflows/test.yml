@@ -1,0 +1,90 @@
+name: Tests
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "api, e2e or all"
+        default: all
+      reason:
+        description: "Why this run: manual or nightly (nightly locator failures go to the Healer)"
+        default: manual
+
+# Suites run against the app's staging deployment (repo variable STAGING_URL).
+# A suite runs only if its folder has tests. Results go to n8n if
+# N8N_WEBHOOK_URL is set; without it the job still passes or fails normally.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      STAGING_URL: ${{ vars.STAGING_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: mkdir -p results
+
+      - name: API tests
+        id: api
+        if: hashFiles('tests/api/test_*.py') != '' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        continue-on-error: true
+        run: |
+          pip install pytest httpx
+          pytest tests/api --junitxml=results/api.xml 2>&1 | tee results/api.log
+
+      - name: Schemathesis
+        id: schema
+        if: hashFiles('tests/api/test_*.py') != '' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        continue-on-error: true
+        run: |
+          pip install schemathesis
+          schemathesis run "$STAGING_URL/openapi.json" 2>&1 | tee results/schema.log
+
+      - name: E2E tests
+        id: e2e
+        if: hashFiles('tests/e2e/**/*.spec.ts') != '' && contains(fromJSON('["all", "e2e"]'), inputs.suite || 'all')
+        continue-on-error: true
+        run: |
+          npm install --no-save @playwright/test @axe-core/playwright
+          npx playwright install --with-deps chromium
+          npx playwright test -c tests/e2e 2>&1 | tee results/e2e.log
+
+      - name: Report
+        if: always()
+        env:
+          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }}
+          DIFF_URL: ${{ github.event.compare || format('{0}/{1}/commit/{2}', github.server_url, github.repository, github.sha) }}
+          REASON: ${{ inputs.reason || github.event_name }}
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+          N8N_WEBHOOK_TOKEN: ${{ secrets.N8N_WEBHOOK_TOKEN }}
+        run: |
+          python3 - <<'PY' > results/results.json
+          import glob, json, os
+          import xml.etree.ElementTree as ET
+          failed = []
+          for path in glob.glob("results/*.xml"):
+              for case in ET.parse(path).iter("testcase"):
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failed.append(f"{case.get('classname')}::{case.get('name')}")
+          tail = "".join(open(p).read()[-2000:] for p in sorted(glob.glob("results/*.log")))
+          print(json.dumps({
+              "repo": os.environ.get("GITHUB_REPOSITORY"),
+              "status": "failure" if "failure" in os.environ["OUTCOMES"].split() else "success",
+              "failed_tests": failed,
+              "log_tail": tail[-4000:],
+              "commit_sha": os.environ.get("GITHUB_SHA"),
+              "diff_url": os.environ["DIFF_URL"],
+              "branch": os.environ.get("GITHUB_REF_NAME"),
+              "reason": os.environ["REASON"],
+          }))
+          PY
+          cat results/results.json
+          if [ -n "$N8N_WEBHOOK_URL" ]; then
+            curl -fsS -X POST -H 'Content-Type: application/json' -H "X-QA-Token: $N8N_WEBHOOK_TOKEN" \
+              --data @results/results.json "$N8N_WEBHOOK_URL" \
+              || echo "::warning::Could not send results to n8n; test outcome is unaffected."
+          fi
+
+      - name: Fail if any suite failed
+        if: contains(format('{0} {1} {2}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome), 'failure')
+        run: exit 1

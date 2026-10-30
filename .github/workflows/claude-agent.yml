@@ -1,0 +1,122 @@
+name: Claude agent
+
+# Runs Claude Code headless as one of the agents in .github/qa-agents/ and opens a PR.
+#   issue labelled needs-tests -> Test Author writes tests for the acceptance criteria
+#   issue labelled bug         -> Test Author writes the smallest failing repro (no fix)
+#   dispatch agent=healer      -> Healer fixes locators in one failing test (sent by n8n)
+# The agent may only write under tests/ (enforced by its tool rules and re-checked below).
+# PRs are pushed with QA_BOT_TOKEN, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN
+# do not trigger other workflows, so test.yml and healer-guard.yml would never run.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "healer"
+        default: healer
+      test_file:
+        description: "Failing test file, e.g. tests/e2e/login.spec.ts"
+      failures:
+        description: "Failing test names and error lines"
+
+jobs:
+  agent:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tests' || github.event.label.name == 'bug'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      STAGING_URL: ${{ vars.STAGING_URL }}
+      MAX_TURNS: "40"
+      MODEL: claude-sonnet-5-5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.QA_BOT_TOKEN }}
+
+      - name: Install Claude Code and test runners
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          pip install pytest httpx
+          npm install --no-save @playwright/test @axe-core/playwright
+          npx playwright install --with-deps chromium
+
+      # Untrusted text (issue title/body, failure log) only ever reaches the
+      # script through env vars, never through ${{ }} inside run:.
+      - name: Build the task
+        id: task
+        env:
+          EVENT: ${{ github.event_name }}
+          LABEL: ${{ github.event.label.name }}
+          ISSUE: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          TEST_FILE: ${{ inputs.test_file }}
+          FAILURES: ${{ inputs.failures }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p .qa && echo ".qa/" >> .git/info/exclude
+          if [ "$EVENT" = workflow_dispatch ]; then
+            case "$TEST_FILE" in tests/*) ;; *) echo "::error::test_file must be under tests/"; exit 1;; esac
+            printf 'Failing test file: %s\n\nFailures:\n%s\n' "$TEST_FILE" "$FAILURES" > .qa/task.md
+            { echo "agent=healer"; echo "branch=qa/healer-$RUN_ID"; echo "title=heal: $TEST_FILE"; } >> "$GITHUB_OUTPUT"
+          else
+            mode=story; prefix=tests; title="tests: $ISSUE_TITLE (#$ISSUE)"
+            if [ "$LABEL" = bug ]; then mode=bug; prefix=repro; title="repro: #$ISSUE $ISSUE_TITLE"; fi
+            printf 'Mode: %s\n\nIssue #%s: %s\n\n%s\n' "$mode" "$ISSUE" "$ISSUE_TITLE" "$ISSUE_BODY" > .qa/task.md
+            { echo "agent=test-author"; echo "branch=qa/$prefix-issue-$ISSUE"; echo "title=$title"; } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT: ${{ steps.task.outputs.agent }}
+          TEST_FILE: ${{ inputs.test_file }}
+        run: |
+          # --setting-sources local: ignore any .claude/settings.json in the repo,
+          # so nothing can widen the tool rules below.
+          if [ "$AGENT" = healer ]; then edit=("Edit($TEST_FILE)"); else edit=("Write(tests/**)" "Edit(tests/**)"); fi
+          claude -p "$(cat .qa/task.md)" \
+            --model "$MODEL" --max-turns "$MAX_TURNS" \
+            --permission-mode default --setting-sources local \
+            --append-system-prompt-file ".github/qa-agents/$AGENT.md" \
+            --allowedTools Read Glob Grep "Write(.qa/**)" "Edit(.qa/**)" "${edit[@]}" \
+              "Bash(pytest *)" "Bash(npx playwright test *)" \
+            | tee .qa/agent.log
+
+      - name: Check what the agent changed
+        id: diff
+        env:
+          AGENT: ${{ steps.task.outputs.agent }}
+          TEST_FILE: ${{ inputs.test_file }}
+        run: |
+          changed=$(git status --porcelain --untracked-files=all | cut -c4-)
+          echo "$changed"
+          if echo "$changed" | grep -v '^tests/' | grep -q .; then
+            echo "::error::Agent changed files outside tests/"; exit 1
+          fi
+          if [ "$AGENT" = healer ] && echo "$changed" | grep -vxF "$TEST_FILE" | grep -q .; then
+            echo "::error::Healer changed a file other than $TEST_FILE"; exit 1
+          fi
+          echo "any=$([ -n "$changed" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          [ -s .qa/pr-body.md ] || echo "(The agent did not write a summary; see the run log.)" > .qa/pr-body.md
+          cat .qa/pr-body.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open the PR
+        if: steps.diff.outputs.any == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.QA_BOT_TOKEN }}
+          BRANCH: ${{ steps.task.outputs.branch }}
+          TITLE: ${{ steps.task.outputs.title }}
+          ISSUE: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "qa-agent"
+          git config user.email "qa-agent@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add tests
+          git commit -m "$TITLE"
+          git push origin "$BRANCH"
+          { cat .qa/pr-body.md; echo; [ -n "$ISSUE" ] && echo "Refs #$ISSUE"; echo "Agent run: $RUN_URL"; } > .qa/body.md
+          gh pr create --head "$BRANCH" --title "$TITLE" --body-file .qa/body.md
