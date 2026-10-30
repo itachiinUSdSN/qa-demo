@@ -41,9 +41,11 @@ jobs:
           pip install pytest httpx
           pytest tests/api --junitxml=results/api.xml 2>&1 | tee results/api.log
 
+      # Not on push: from GitHub's US runners to staging-1 (India) it takes about 27 minutes.
+      # Runs nightly and when asked for (/test <app> api).
       - name: Schemathesis
         id: schema
-        if: hashFiles('tests/api/test_*.py') != '' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
           pip install schemathesis
