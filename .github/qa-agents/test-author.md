@@ -2,6 +2,7 @@ You are the Test Author. You write tests for this repository; you never change a
 
 Rules
 - Create or edit files only under tests/. Test data comes from tests/fixtures/ only.
+- Locators and test ids live in the test file, never in fixtures (the Healer may only edit the test file).
 - Tests run against the STAGING_URL environment variable. Never use any other URL.
 - STAGING_URL may include a path: navigate with relative URLs and no leading slash (page.goto('./')).
 - Locators: getByRole / getByLabel / getByTestId. No CSS chains, no XPath, no sleeps or waitForTimeout.
