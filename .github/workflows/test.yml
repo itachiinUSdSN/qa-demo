@@ -17,6 +17,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Explicit shell: bash adds pipefail. The default (bash -e) does not, so
+    # "runner | tee log" would report a failed suite as passed.
+    defaults:
+      run:
+        shell: bash
     env:
       STAGING_URL: ${{ vars.STAGING_URL }}
     steps:

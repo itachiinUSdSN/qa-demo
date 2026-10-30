@@ -26,6 +26,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tests' || github.event.label.name == 'bug'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Explicit shell: bash adds pipefail. The default (bash -e) does not, so
+    # "runner | tee log" would report a failed suite as passed.
+    defaults:
+      run:
+        shell: bash
     env:
       STAGING_URL: ${{ vars.STAGING_URL }}
       MAX_TURNS: "40"
@@ -93,11 +98,13 @@ jobs:
         run: |
           changed=$(git status --porcelain --untracked-files=all | cut -c4-)
           echo "$changed"
-          if echo "$changed" | grep -v '^tests/' | grep -q .; then
-            echo "::error::Agent changed files outside tests/"; exit 1
+          outside=$(echo "$changed" | grep -v '^tests/' || true)
+          if [ -n "$outside" ]; then
+            echo "::error::Agent changed files outside tests/: $outside"; exit 1
           fi
-          if [ "$AGENT" = healer ] && echo "$changed" | grep -vxF "$TEST_FILE" | grep -q .; then
-            echo "::error::Healer changed a file other than $TEST_FILE"; exit 1
+          others=$(echo "$changed" | grep -vxF "$TEST_FILE" || true)
+          if [ "$AGENT" = healer ] && [ -n "$others" ]; then
+            echo "::error::Healer changed a file other than $TEST_FILE: $others"; exit 1
           fi
           echo "any=$([ -n "$changed" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
           [ -s .qa/pr-body.md ] || echo "(The agent did not write a summary; see the run log.)" > .qa/pr-body.md
