@@ -5,6 +5,8 @@ name: Claude agent
 #   issue labelled bug         -> Test Author writes the smallest failing repro (no fix)
 #   issue labelled load-test   -> Load Test Author writes k6 scripts under tests/load/
 #   dispatch agent=healer      -> Healer fixes locators in one failing test (sent by n8n)
+#   dispatch agent=test-author -> Test Author for a Jira ticket (sent by n8n W2): branch
+#                                 <KEY>-tests-<slug> / <KEY>-repro-<slug>, PR title starts with the key
 # The agent may only write under tests/ (enforced by its tool rules and re-checked below).
 # PRs are pushed with QA_BOT_TOKEN, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN
 # do not trigger other workflows, so test.yml and healer-guard.yml would never run.
@@ -15,12 +17,22 @@ on:
   workflow_dispatch:
     inputs:
       agent:
-        description: "healer"
+        description: "healer or test-author"
         default: healer
       test_file:
-        description: "Failing test file, e.g. tests/e2e/login.spec.ts"
+        description: "Healer: failing test file, e.g. tests/e2e/login.spec.ts"
       failures:
-        description: "Failing test names and error lines"
+        description: "Healer: failing test names and error lines"
+      mode:
+        description: "Test Author: story or bug"
+      jira_key:
+        description: "Test Author: Jira ticket key, e.g. QA-12"
+      jira_url:
+        description: "Test Author: link to the Jira ticket"
+      issue_title:
+        description: "Test Author: ticket summary"
+      issue_body:
+        description: "Test Author: ticket description"
 
 jobs:
   agent:
@@ -62,9 +74,24 @@ jobs:
           TEST_FILE: ${{ inputs.test_file }}
           FAILURES: ${{ inputs.failures }}
           RUN_ID: ${{ github.run_id }}
+          AGENT_IN: ${{ inputs.agent }}
+          MODE: ${{ inputs.mode }}
+          JIRA_KEY: ${{ inputs.jira_key }}
+          JIRA_URL: ${{ inputs.jira_url }}
+          JIRA_TITLE: ${{ inputs.issue_title }}
+          JIRA_BODY: ${{ inputs.issue_body }}
         run: |
           mkdir -p .qa && echo ".qa/" >> .git/info/exclude
-          if [ "$EVENT" = workflow_dispatch ]; then
+          if [ "$EVENT" = workflow_dispatch ] && [ "$AGENT_IN" = test-author ]; then
+            [[ "$JIRA_KEY" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || { echo "::error::jira_key must look like QA-12"; exit 1; }
+            case "$MODE" in story|bug) ;; *) echo "::error::mode must be story or bug"; exit 1;; esac
+            case "$JIRA_URL" in https://*) ;; *) echo "::error::jira_url must be https"; exit 1;; esac
+            slug=$(printf '%s' "$JIRA_TITLE" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-40 | sed 's/-$//')
+            prefix=tests; title="$JIRA_KEY tests: $JIRA_TITLE"
+            if [ "$MODE" = bug ]; then prefix=repro; title="$JIRA_KEY repro: $JIRA_TITLE"; fi
+            printf 'Mode: %s\n\nJira %s: %s\n\n%s\n' "$MODE" "$JIRA_KEY" "$JIRA_TITLE" "$JIRA_BODY" > .qa/task.md
+            { echo "agent=test-author"; echo "branch=$JIRA_KEY-$prefix-${slug:-ticket}"; echo "title=$title"; echo "jira_url=$JIRA_URL"; } >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = workflow_dispatch ]; then
             case "$TEST_FILE" in tests/*) ;; *) echo "::error::test_file must be under tests/"; exit 1;; esac
             printf 'Failing test file: %s\n\nFailures:\n%s\n' "$TEST_FILE" "$FAILURES" > .qa/task.md
             { echo "agent=healer"; echo "branch=qa/healer-$RUN_ID"; echo "title=heal: $TEST_FILE"; } >> "$GITHUB_OUTPUT"
@@ -145,6 +172,7 @@ jobs:
           BRANCH: ${{ steps.task.outputs.branch }}
           TITLE: ${{ steps.task.outputs.title }}
           ISSUE: ${{ github.event.issue.number }}
+          JIRA_URL: ${{ steps.task.outputs.jira_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git config user.name "qa-agent"
@@ -153,5 +181,5 @@ jobs:
           git add tests
           git commit -m "$TITLE"
           git push origin "$BRANCH"
-          { cat .qa/pr-body.md; echo; [ -n "$ISSUE" ] && echo "Refs #$ISSUE"; echo "Agent run: $RUN_URL"; } > .qa/body.md
+          { cat .qa/pr-body.md; echo; [ -n "$ISSUE" ] && echo "Refs #$ISSUE"; [ -n "$JIRA_URL" ] && echo "Jira: $JIRA_URL"; echo "Agent run: $RUN_URL"; } > .qa/body.md
           gh pr create --head "$BRANCH" --title "$TITLE" --body-file .qa/body.md
