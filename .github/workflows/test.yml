@@ -53,7 +53,7 @@ jobs:
       # Runs nightly and when asked for (/test <app> api).
       - name: Schemathesis
         id: schema
-        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && inputs.reason != 'deploy' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
           pip install schemathesis
