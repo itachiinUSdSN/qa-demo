@@ -9,6 +9,8 @@
     <h1>QA Demo Shop</h1>
     <p>Throwaway demo for the qa-agents platform. All data is made up.</p>
     <p>Cart: <span data-testid="cart-count">0</span> items</p>
+    <!-- Planted UX bug for the Phase 4 check: icon-only, tiny, faint, no accessible name. -->
+    <button data-testid="checkout" style="font-size:9px;padding:0;color:#ccc;background:#fff;border:1px solid #eee">&rarr;</button>
     <ul aria-label="Products">
       <li>Blue mug <button data-testid="add-mug-blue">Add to cart</button></li>
       <li>Red pen <button data-testid="add-red-pen">Add to cart</button></li>

@@ -2,16 +2,19 @@ name: Tests
 
 on:
   push:
+    # W5 stores persona screenshots on this branch; they are not code.
+    branches-ignore: [qa-artifacts]
   workflow_dispatch:
     inputs:
       suite:
-        description: "api, e2e or all"
+        description: "api, e2e, mobile or all; load or capacity (on demand only)"
         default: all
       reason:
         description: "Why this run: manual or nightly (nightly locator failures go to the Healer)"
         default: manual
 
-# Suites run against the app's staging deployment (repo variable STAGING_URL).
+# Suites run against the app's staging deployment (repo variable STAGING_URL;
+# STAGING_API_URL too if the API is on another host).
 # A suite runs only if its folder has tests. Results go to n8n if
 # N8N_WEBHOOK_URL is set; without it the job still passes or fails normally.
 jobs:
@@ -24,10 +27,11 @@ jobs:
         shell: bash
     env:
       STAGING_URL: ${{ vars.STAGING_URL }}
+      STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
     steps:
       - uses: actions/checkout@v4
 
-      - run: mkdir -p results
+      - run: mkdir -p results && date +%s > results/started
 
       - name: API tests
         id: api
@@ -37,13 +41,18 @@ jobs:
           pip install pytest httpx
           pytest tests/api --junitxml=results/api.xml 2>&1 | tee results/api.log
 
+      # Not on push: from GitHub's US runners to staging-1 (India) it takes about 27 minutes.
+      # Runs nightly and when asked for (/test <app> api).
       - name: Schemathesis
         id: schema
-        if: hashFiles('tests/api/test_*.py') != '' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
           pip install schemathesis
-          schemathesis run "$STAGING_URL/openapi.json" 2>&1 | tee results/schema.log
+          # GET only: fuzzing POSTs on staging would sign up junk users or send password-reset
+          # emails to random addresses. Only server errors fail the run; agents have no
+          # credentials, so undocumented 401s are expected and are not bugs.
+          schemathesis run "$STAGING_API_URL/openapi.json" --include-method GET --checks not_a_server_error --max-examples 20 2>&1 | tee results/schema.log
 
       - name: E2E tests
         id: e2e
@@ -54,23 +63,98 @@ jobs:
           npx playwright install --with-deps chromium
           npx playwright test -c tests/e2e 2>&1 | tee results/e2e.log
 
+      # Mobile: Maestro flows run on an Android emulator against a staging build
+      # downloaded from the repo variable STAGING_APK_URL.
+      - name: Mobile setup
+        id: mobile_setup
+        if: hashFiles('tests/mobile/**/*.yaml') != '' && vars.STAGING_APK_URL != '' && contains(fromJSON('["all", "mobile"]'), inputs.suite || 'all')
+        env:
+          STAGING_APK_URL: ${{ vars.STAGING_APK_URL }}
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          curl -fsSL "$STAGING_APK_URL" -o app.apk
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Mobile tests (Maestro)
+        id: mobile
+        if: steps.mobile_setup.outcome == 'success'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          script: |
+            adb install -r app.apk
+            bash -o pipefail -c 'maestro test tests/mobile --format junit --output results/mobile.xml 2>&1 | tee results/mobile.log'
+
+      # Load: k6 scripts in tests/load/, only when asked for (never on push or in "all").
+      #   load:     light regression gate against staging, fixed at 10 virtual users for 1 minute.
+      #   capacity: ramp to 300 virtual users to find the breaking point, only against
+      #             LOAD_CAPACITY_URL, which must not be staging (it shares a box with other apps).
+      - name: Set up k6
+        if: hashFiles('tests/load/*.js') != '' && contains(fromJSON('["load", "capacity"]'), inputs.suite)
+        uses: grafana/setup-k6-action@v1
+
+      - name: Load tests (k6)
+        id: load
+        if: hashFiles('tests/load/*.js') != '' && contains(fromJSON('["load", "capacity"]'), inputs.suite)
+        continue-on-error: true
+        env:
+          SUITE: ${{ inputs.suite }}
+          LOAD_CAPACITY_URL: ${{ vars.LOAD_CAPACITY_URL }}
+          LOAD_CAPACITY_WEB_URL: ${{ vars.LOAD_CAPACITY_WEB_URL || vars.LOAD_CAPACITY_URL }}
+        run: |
+          if [ "$SUITE" = capacity ]; then
+            case "$LOAD_CAPACITY_URL" in
+              "" | "$STAGING_URL"* | "$STAGING_API_URL"*)
+                echo "::error::capacity runs need LOAD_CAPACITY_URL set to a box that is not staging"; exit 1;;
+            esac
+            case "$LOAD_CAPACITY_WEB_URL" in "$STAGING_URL"* | "$STAGING_API_URL"*)
+              echo "::error::LOAD_CAPACITY_WEB_URL must not be staging"; exit 1;;
+            esac
+            export BASE_URL="$LOAD_CAPACITY_URL" WEB_URL="$LOAD_CAPACITY_WEB_URL"; shape=(--stage 2m:50 --stage 5m:300 --stage 1m:0)
+          else
+            export BASE_URL="$STAGING_API_URL" WEB_URL="$STAGING_URL"; shape=(--vus 10 --duration 1m)
+          fi
+          { rc=0; for f in tests/load/*.js; do k6 run "${shape[@]}" "$f" || rc=1; done; exit $rc; } 2>&1 | tee results/load.log
+
+      # Logs, JUnit files and Playwright traces/screenshots. Jira tickets link here;
+      # nothing is attached to Jira.
+      - name: Upload results
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            results/
+            tests/e2e/test-results/
+          if-no-files-found: ignore
+
       - name: Report
         if: always()
         env:
-          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }}
+          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }} ${{ steps.mobile.outcome }} ${{ steps.load.outcome }}
           DIFF_URL: ${{ github.event.compare || format('{0}/{1}/commit/{2}', github.server_url, github.repository, github.sha) }}
           REASON: ${{ inputs.reason || github.event_name }}
+          SUITE: ${{ inputs.suite || 'all' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
           N8N_WEBHOOK_TOKEN: ${{ secrets.N8N_WEBHOOK_TOKEN }}
         run: |
           python3 - <<'PY' > results/results.json
-          import glob, json, os
+          import glob, json, os, time
           import xml.etree.ElementTree as ET
-          failed = []
+          failed, passed = [], 0
           for path in glob.glob("results/*.xml"):
               for case in ET.parse(path).iter("testcase"):
                   if case.find("failure") is not None or case.find("error") is not None:
                       failed.append(f"{case.get('classname')}::{case.get('name')}")
+                  elif case.find("skipped") is None:
+                      passed += 1
           tail = "".join(open(p).read()[-2000:] for p in sorted(glob.glob("results/*.log")))
           print(json.dumps({
               "repo": os.environ.get("GITHUB_REPOSITORY"),
@@ -81,6 +165,11 @@ jobs:
               "diff_url": os.environ["DIFF_URL"],
               "branch": os.environ.get("GITHUB_REF_NAME"),
               "reason": os.environ["REASON"],
+              "suite": os.environ["SUITE"],
+              "passed": passed,
+              "duration_s": int(time.time()) - int(open("results/started").read()),
+              "run_url": os.environ["RUN_URL"],
+              "artifact_url": os.environ.get("ARTIFACT_URL") or os.environ["RUN_URL"],
           }))
           PY
           cat results/results.json
@@ -91,5 +180,5 @@ jobs:
           fi
 
       - name: Fail if any suite failed
-        if: contains(format('{0} {1} {2}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome), 'failure')
+        if: contains(format('{0} {1} {2} {3} {4}', steps.api.outcome, steps.schema.outcome, steps.e2e.outcome, steps.mobile.outcome, steps.load.outcome), 'failure')
         run: exit 1
