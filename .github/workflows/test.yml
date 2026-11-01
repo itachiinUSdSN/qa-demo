@@ -35,7 +35,9 @@ jobs:
 
       # Staging test users (scripts/staging-qa-users.py) sign in once per run. Tests get tokens
       # through QA_TOKENS, never passwords.
+      # If this fails no suite runs; Report must then say failure, not a green run with 0 tests.
       - name: Sign in QA users
+        id: signin
         env:
           QA_USERS: ${{ secrets.QA_USERS }}
           QA_OWNER: ${{ secrets.QA_OWNER }}
@@ -144,7 +146,7 @@ jobs:
       - name: Report
         if: always()
         env:
-          OUTCOMES: ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }} ${{ steps.mobile.outcome }} ${{ steps.load.outcome }}
+          OUTCOMES: ${{ steps.signin.outcome }} ${{ steps.api.outcome }} ${{ steps.schema.outcome }} ${{ steps.e2e.outcome }} ${{ steps.mobile.outcome }} ${{ steps.load.outcome }}
           DIFF_URL: ${{ github.event.compare || format('{0}/{1}/commit/{2}', github.server_url, github.repository, github.sha) }}
           REASON: ${{ inputs.reason || github.event_name }}
           SUITE: ${{ inputs.suite || 'all' }}
@@ -165,6 +167,9 @@ jobs:
                       passed += 1
                       passed_tests.append(f"{case.get('classname')}::{case.get('name')}")
           tail = "".join(open(p).read()[-2000:] for p in sorted(glob.glob("results/*.log")))
+          # The sign-in output is not captured: it carries ::add-mask:: lines with the tokens.
+          if os.environ["OUTCOMES"].split()[0] == "failure":
+              tail = "Sign in QA users failed (see the run log), so no suite ran.\n" + tail
           print(json.dumps({
               "repo": os.environ.get("GITHUB_REPOSITORY"),
               "status": "failure" if "failure" in os.environ["OUTCOMES"].split() else "success",
