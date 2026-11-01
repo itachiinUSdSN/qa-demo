@@ -10,4 +10,7 @@
 - One test = one behaviour. No helpers until the third copy.
 - Done = runner output shows green; paste the summary in the PR.
 - Tests run against STAGING_URL (and STAGING_API_URL for the API) only. Never a production URL, never real customer data.
+- Signed-in tests use the staging QA users only: `signed_in("<role>")` (API) or `asRole('<role>')` (browser). Pick the least-privileged role that can do the job; `owner` only for owner-only screens. Never type or store a password.
+- Every record a test creates has a name or title starting with `QA-TEST` (fixtures too). A nightly job deletes them. Never edit or delete a record the test did not create.
+- No payments, real emails or messages to real people, even on staging.
 <!-- qa-agents:end -->

@@ -1,0 +1,39 @@
+name: QA persona sign-in
+# Started by n8n W5 before persona runs. Signs in the staging QA users and sends their tokens
+# (valid 60 minutes) to n8n W8. Passwords never leave the GitHub secrets.
+on:
+  workflow_dispatch:
+
+jobs:
+  sign-in:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in QA users
+        env:
+          QA_USERS: ${{ secrets.QA_USERS }}
+          QA_OWNER: ${{ secrets.QA_OWNER }}
+        run: python3 .github/qa-agents/qa-sign-in.py
+
+      - name: Send tokens to n8n
+        if: env.QA_TOKENS != ''
+        env:
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+          N8N_WEBHOOK_TOKEN: ${{ secrets.N8N_WEBHOOK_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          tokens = {r: v["token"] for r, v in json.load(open(os.environ["QA_TOKENS"])).items()}
+          url = os.environ["N8N_WEBHOOK_URL"].rsplit("/", 1)[0] + "/persona-tokens"
+          body = json.dumps({"repo": os.environ["GITHUB_REPOSITORY"], "tokens": tokens}).encode()
+          req = urllib.request.Request(url, data=body, method="POST", headers={
+              "Content-Type": "application/json", "X-QA-Token": os.environ["N8N_WEBHOOK_TOKEN"]})
+          urllib.request.urlopen(req, timeout=30).read()
+          print(f"Sent tokens for: {', '.join(sorted(tokens))}")
+          PY

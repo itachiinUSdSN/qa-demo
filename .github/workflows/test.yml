@@ -33,6 +33,14 @@ jobs:
 
       - run: mkdir -p results && date +%s > results/started
 
+      # Staging test users (scripts/staging-qa-users.py) sign in once per run. Tests get tokens
+      # through QA_TOKENS, never passwords.
+      - name: Sign in QA users
+        env:
+          QA_USERS: ${{ secrets.QA_USERS }}
+          QA_OWNER: ${{ secrets.QA_OWNER }}
+        run: python3 .github/qa-agents/qa-sign-in.py
+
       - name: API tests
         id: api
         if: hashFiles('tests/api/test_*.py') != '' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
