@@ -53,7 +53,7 @@ jobs:
       # Runs nightly and when asked for (/test <app> api).
       - name: Schemathesis
         id: schema
-        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && inputs.reason != 'deploy' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
           pip install schemathesis
@@ -156,13 +156,14 @@ jobs:
           python3 - <<'PY' > results/results.json
           import glob, json, os, time
           import xml.etree.ElementTree as ET
-          failed, passed = [], 0
+          failed, passed, passed_tests = [], 0, []
           for path in glob.glob("results/*.xml"):
               for case in ET.parse(path).iter("testcase"):
                   if case.find("failure") is not None or case.find("error") is not None:
                       failed.append(f"{case.get('classname')}::{case.get('name')}")
                   elif case.find("skipped") is None:
                       passed += 1
+                      passed_tests.append(f"{case.get('classname')}::{case.get('name')}")
           tail = "".join(open(p).read()[-2000:] for p in sorted(glob.glob("results/*.log")))
           print(json.dumps({
               "repo": os.environ.get("GITHUB_REPOSITORY"),
@@ -175,6 +176,7 @@ jobs:
               "reason": os.environ["REASON"],
               "suite": os.environ["SUITE"],
               "passed": passed,
+              "passed_tests": passed_tests,
               "duration_s": int(time.time()) - int(open("results/started").read()),
               "run_url": os.environ["RUN_URL"],
               "artifact_url": os.environ.get("ARTIFACT_URL") or os.environ["RUN_URL"],
