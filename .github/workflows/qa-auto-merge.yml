@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   merge:
@@ -34,6 +35,8 @@ jobs:
       SHA: ${{ github.event.workflow_run.head_sha }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
+      # The bot token labels, comments and merges; check results are read with the job's own token.
+      CHECKS_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,7 +65,7 @@ jobs:
           fi
           # Every other check on this commit must finish green (PR checks may still be running).
           for i in $(seq 1 40); do
-            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" -q '.check_runs')
+            runs=$(GH_TOKEN="$CHECKS_TOKEN" gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" -q '.check_runs')
             pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
             failed=$(jq -r '[.[] | select(.status == "completed" and (.conclusion | IN("success","skipped","neutral") | not)) | .name] | join(", ")' <<<"$runs")
             [ -n "$failed" ] && held "a check failed: $failed"
