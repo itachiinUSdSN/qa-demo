@@ -8,6 +8,7 @@ name: Claude agent
 #   dispatch agent=test-author -> Test Author for a Jira ticket (sent by n8n W2): branch
 #                                 <KEY>-tests-<slug> / <KEY>-repro-<slug>, PR title starts with the key
 # The agent may only write under tests/ (enforced by its tool rules and re-checked below).
+# Its PRs carry the label qa-agent; qa-auto-merge.yml merges them when green and test-only.
 # PRs are pushed with QA_BOT_TOKEN, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN
 # do not trigger other workflows, so test.yml and healer-guard.yml would never run.
 
@@ -109,6 +110,14 @@ jobs:
         if: steps.task.outputs.agent == 'load-tester'
         uses: grafana/setup-k6-action@v1
 
+      # Tests the agent writes and runs can sign in as staging QA users (tokens only).
+      - name: Sign in QA users
+        if: steps.task.outputs.agent != 'load-tester'
+        env:
+          QA_USERS: ${{ secrets.QA_USERS }}
+          QA_OWNER: ${{ secrets.QA_OWNER }}
+        run: python3 .github/qa-agents/qa-sign-in.py
+
       - name: Run the agent
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -182,4 +191,4 @@ jobs:
           git commit -m "$TITLE"
           git push origin "$BRANCH"
           { cat .qa/pr-body.md; echo; [ -n "$ISSUE" ] && echo "Refs #$ISSUE"; [ -n "$JIRA_URL" ] && echo "Jira: $JIRA_URL"; echo "Agent run: $RUN_URL"; } > .qa/body.md
-          gh pr create --head "$BRANCH" --title "$TITLE" --body-file .qa/body.md
+          gh pr create --head "$BRANCH" --title "$TITLE" --body-file .qa/body.md --label qa-agent

@@ -1,0 +1,91 @@
+name: QA auto-merge
+
+# Merges an agent's test PR on its own once its Tests run passes, if it changes only tests and
+# weakens nothing; anything else is held for a person. Runs on workflow_run, so the rules always
+# come from the default branch: a PR cannot change the rules that judge it. The merge uses
+# QA_BOT_TOKEN so the push to the default branch runs the tests again.
+#   Merged: label qa-agent, not a draft, not a repro (repro tests fail on purpose), Tests green on
+#   the PR's latest commit, every other check green, only files under tests/, no removed or
+#   changed expect(/assert line.
+#   Held: the same PR gets the label held-for-review and one comment saying which rule failed.
+
+on:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.QA_BOT_TOKEN }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the PR against the rules
+        id: check
+        run: |
+          pr=$(gh pr list -R "$REPO" --head "$BRANCH" --state open --json number,labels,isDraft,headRefOid,baseRefName \
+               -q '.[0] // empty')
+          [ -n "$pr" ] || { echo "No open PR for $BRANCH."; exit 0; }
+          num=$(jq -r .number <<<"$pr"); base=$(jq -r .baseRefName <<<"$pr")
+          echo "num=$num" >> "$GITHUB_OUTPUT"
+          jq -e '.labels | map(.name) | index("qa-agent")' <<<"$pr" >/dev/null || { echo "#$num is not an agent PR."; exit 0; }
+          jq -e '.labels | map(.name) | index("held-for-review")' <<<"$pr" >/dev/null && { echo "#$num is held for review."; exit 0; }
+          held() { echo "verdict=hold" >> "$GITHUB_OUTPUT"; echo "reason=$1" >> "$GITHUB_OUTPUT"; echo "Hold: $1"; exit 0; }
+          [ "$(jq -r .isDraft <<<"$pr")" = false ] || held "the PR is a draft"
+          [ "$(jq -r .headRefOid <<<"$pr")" = "$SHA" ] || { echo "#$num has newer commits; their own run decides."; exit 0; }
+          case "$BRANCH" in *repro*) held "repro PRs show a bug and wait for its fix";; esac
+          git fetch -q origin "$base" "$SHA"
+          files=$(git diff --name-only "origin/$base...$SHA")
+          bad=$(grep -v '^tests/' <<<"$files" || true)
+          [ -z "$bad" ] || held "it changes files outside tests/: $(tr '\n' ' ' <<<"$bad")"
+          if git diff -U0 "origin/$base...$SHA" | grep -E '^-[^-]' | grep -qE 'expect\(|assert'; then
+            held "it removes or changes an expect(/assert line"
+          fi
+          # Every other check on this commit must finish green (PR checks may still be running).
+          for i in $(seq 1 40); do
+            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" -q '.check_runs')
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
+            failed=$(jq -r '[.[] | select(.status == "completed" and (.conclusion | IN("success","skipped","neutral") | not)) | .name] | join(", ")' <<<"$runs")
+            [ -n "$failed" ] && held "a check failed: $failed"
+            [ "$pending" = 0 ] && break
+            sleep 15
+          done
+          [ "$pending" = 0 ] || held "checks were still running after 10 minutes"
+          echo "verdict=merge" >> "$GITHUB_OUTPUT"
+
+      - name: Merge
+        if: steps.check.outputs.verdict == 'merge'
+        env:
+          NUM: ${{ steps.check.outputs.num }}
+        run: |
+          gh pr edit "$NUM" -R "$REPO" --add-label auto-merged
+          gh pr comment "$NUM" -R "$REPO" --body "Auto-merged: tests green ($RUN_URL), only tests/ changed, no assertion removed or changed."
+          gh pr merge "$NUM" -R "$REPO" --merge --delete-branch
+
+      - name: Hold for review
+        if: steps.check.outputs.verdict == 'hold'
+        env:
+          NUM: ${{ steps.check.outputs.num }}
+          REASON: ${{ steps.check.outputs.reason }}
+        run: |
+          gh pr edit "$NUM" -R "$REPO" --add-label held-for-review
+          gh pr comment "$NUM" -R "$REPO" --body "Held for review: $REASON. Merge it yourself once you've checked it, or remove the held-for-review label to let the next green run decide."
