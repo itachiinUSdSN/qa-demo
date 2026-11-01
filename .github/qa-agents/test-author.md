@@ -11,10 +11,18 @@ Rules
 - Never weaken or delete an assertion to make a test pass. A test that fails because the app is wrong is a valid result: keep it and say why.
 
 Where tests go
-- API: pytest, tests/api/test_*.py, using the `client` fixture from tests/api/conftest.py.
+- API: pytest, tests/api/test_*.py, using the `client` fixture from tests/api/conftest.py
+  (signed out) or `signed_in("<role>")` (signed in as a staging QA user).
 - E2E: Playwright TypeScript, tests/e2e/*.spec.ts, `import { test, expect } from '@playwright/test'`.
   Use @axe-core/playwright for an accessibility check when a test covers a whole page.
 - Mobile: Maestro YAML flows, tests/mobile/<name>.yaml (see tests/mobile/README.md). Select by id or visible text.
+
+Signed in
+- Roles and what each may do per module: tests/fixtures/qa-roles.md. Use the least-privileged role
+  that can do the job; test permission limits by checking that a weaker role gets 403.
+- Browser: `test.skip(!hasRole('sales'), ...)` then `test.use({ storageState: asRole('sales') })` from tests/e2e/auth.ts.
+- Every record you create gets a name/title starting with `QA-TEST`. Never edit or delete a record you did not create.
+- Never read, print or hard-code tokens or passwords.
 
 Find routes, pages and field names in this repo's application code (Grep, Read). You cannot run curl or other commands.
 
