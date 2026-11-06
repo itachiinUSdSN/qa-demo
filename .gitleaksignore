@@ -1,0 +1,3 @@
+# Rotated/fake secrets that stay in git history (gitleaks fingerprint: commit:file:rule:line).
+# r2test2 B3 CHECK plant: the key was fake (random characters), nothing to rotate.
+1951f75b69aeb6804f2ced45ddb6401c971d0a95:plant/config.js:generic-api-key:2

@@ -8,7 +8,8 @@ run-name: "agent: ${{ inputs.agent || github.event.label.name }}"
 #   issue labelled load-test   -> Load Test Author writes k6 scripts under tests/load/
 #   dispatch agent=healer      -> Healer fixes locators in one failing test (sent by n8n)
 #   dispatch agent=test-author -> Test Author for a Jira ticket (sent by n8n W2): branch
-#                                 <KEY>-tests-<slug> / <KEY>-repro-<slug>, PR title starts with the key
+#                                 <KEY>-tests-<slug> / <KEY>-repro-<slug> / <KEY>-sectest-<slug> (Jira label
+#                                 security-test), PR title starts with the key
 # The agent may only write under tests/ (enforced by its tool rules and re-checked below).
 # Its PRs carry the label qa-agent; qa-auto-merge.yml merges Healer PRs when green and test-only and holds the rest.
 # PRs are pushed with QA_BOT_TOKEN, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN
@@ -31,7 +32,7 @@ on:
       failures:
         description: "Healer: failing test names and error lines"
       mode:
-        description: "Test Author: story or bug"
+        description: "Test Author: story, bug or security"
       jira_key:
         description: "Test Author: Jira ticket key, e.g. QA-12"
       jira_url:
@@ -100,11 +101,12 @@ jobs:
           mkdir -p .qa && echo ".qa/" >> .git/info/exclude
           if [ "$EVENT" = workflow_dispatch ] && [ "$AGENT_IN" = test-author ]; then
             [[ "$JIRA_KEY" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || { echo "::error::jira_key must look like QA-12"; exit 1; }
-            case "$MODE" in story|bug) ;; *) echo "::error::mode must be story or bug"; exit 1;; esac
+            case "$MODE" in story|bug|security) ;; *) echo "::error::mode must be story, bug or security"; exit 1;; esac
             case "$JIRA_URL" in https://*) ;; *) echo "::error::jira_url must be https"; exit 1;; esac
             slug=$(printf '%s' "$JIRA_TITLE" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-40 | sed 's/-$//')
             prefix=tests; title="$JIRA_KEY tests: $JIRA_TITLE"
             if [ "$MODE" = bug ]; then prefix=repro; title="$JIRA_KEY repro: $JIRA_TITLE"; fi
+            if [ "$MODE" = security ]; then prefix=sectest; title="$JIRA_KEY security tests: $JIRA_TITLE"; fi
             printf 'Mode: %s\n\nJira %s: %s\n\n%s\n' "$MODE" "$JIRA_KEY" "$JIRA_TITLE" "$JIRA_BODY" > .qa/task.md
             { echo "agent=test-author"; echo "branch=$JIRA_KEY-$prefix-${slug:-ticket}"; echo "title=$title"; echo "jira_url=$JIRA_URL"; } >> "$GITHUB_OUTPUT"
           elif [ "$EVENT" = workflow_dispatch ]; then

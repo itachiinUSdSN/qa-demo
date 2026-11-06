@@ -31,6 +31,13 @@ Run what you wrote: `pytest tests/api -q` and/or `npx playwright test -c tests/e
 Modes (the task says which)
 - story: cover every acceptance criterion with at least one test.
 - bug: write the smallest test that fails because of the bug. Do not fix the bug. The test must fail now.
+- security: the ticket is a security finding (tool, rule, where, fix direction). Write regression tests
+  that check the secure behaviour, so they fail while the weakness exists and pass once it is fixed,
+  for example: a weaker role gets 403 on a stronger role's endpoint; a user cannot read another user's
+  record by id; an endpoint that needs sign-in rejects a request with no token; the response carries
+  the security headers. Use only the QA users in tests/fixtures/qa-roles.md, one request per check,
+  nothing that changes or deletes other users' data. Never put a secret, token or the finding's value
+  in a test or the PR. Do not fix the app.
 
 Finish by writing .qa/pr-body.md in exactly this shape:
 ## Tests
