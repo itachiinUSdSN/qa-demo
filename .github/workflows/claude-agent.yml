@@ -1,4 +1,6 @@
 name: Claude agent
+# The weekly report (W11) counts agent runs by type from this run name.
+run-name: "agent: ${{ inputs.agent || github.event.label.name }}"
 
 # Runs Claude Code headless as one of the agents in .github/qa-agents/ and opens a PR.
 #   issue labelled needs-tests -> Test Author writes tests for the acceptance criteria
