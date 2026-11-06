@@ -7,7 +7,7 @@ const products: { names: string[] } = JSON.parse(
   readFileSync(join(__dirname, '../fixtures/products.json'), 'utf-8'),
 );
 
-test('page lists the three products', async ({ page }) => {
+test.only('page lists the three products', async ({ page }) => {
   await page.goto('./');
   const items = page.getByRole('listitem');
   await expect(items).toHaveCount(products.names.length);
