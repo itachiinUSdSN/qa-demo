@@ -1,0 +1,7 @@
+git config auth header: none
+env QA_BOT_TOKEN: none
+env GH_TOKEN: none
+env GITHUB_TOKEN: none
+env INPUT_TOKEN: none
+credential files: none
+RESULT: no write credential reachable
