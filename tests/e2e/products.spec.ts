@@ -1,3 +1,4 @@
+// A1 check plant (QA-999-tests-a1-plant): comment only, no behaviour change.
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { readFileSync } from 'fs';
