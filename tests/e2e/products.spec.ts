@@ -45,3 +45,5 @@ test('page has no serious or critical accessibility violations', async ({ page }
   const serious = results.violations.filter(v => v.impact === 'serious' || v.impact === 'critical');
   expect(serious).toEqual([]);
 });
+
+test.describe.skip('later', () => {});
