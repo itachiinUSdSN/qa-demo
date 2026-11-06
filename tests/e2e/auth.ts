@@ -23,3 +23,4 @@ export function asRole(role: string): string {
   fs.writeFileSync(out, JSON.stringify({ cookies: [], origins: [{ origin, localStorage: [{ name: 'token', value: token }] }] }), { mode: 0o600 });
   return out;
 }
+// plant
