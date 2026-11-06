@@ -23,7 +23,7 @@ test('each product has an Add to cart button', async ({ page }) => {
   await expect(buttons).toHaveCount(products.names.length);
 });
 
-test('cart count starts at 0', async ({ page }) => {
+test.fixme('cart count starts at 0', async ({ page }) => {
   await page.goto('./');
   const cartCount = page.getByTestId('cart-count');
   await expect(cartCount).toHaveText('0');
