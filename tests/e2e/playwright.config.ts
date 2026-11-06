@@ -8,3 +8,4 @@ export default defineConfig({
   reporter: [['list'], ['junit', { outputFile: '../../results/e2e.xml' }]],
   use: { baseURL: process.env.STAGING_URL, trace: 'retain-on-failure' },
 });
+// plant
