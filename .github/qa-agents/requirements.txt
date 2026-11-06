@@ -1,0 +1,5 @@
+# Exact versions of the Python tools the qa-agents workflows install (used as pip -c constraints).
+# Dependabot updates them.
+httpx==0.28.1
+pytest==9.2.0
+schemathesis==4.33.1

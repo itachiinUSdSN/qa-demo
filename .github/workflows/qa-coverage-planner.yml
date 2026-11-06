@@ -25,10 +25,10 @@ jobs:
       MAX_TURNS: "30"
       MODEL: claude-sonnet-5-5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g "@anthropic-ai/claude-code@$(jq -r '.dependencies["@anthropic-ai/claude-code"]' .github/qa-agents/package.json)"
 
       - name: Build the task
         env:

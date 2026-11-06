@@ -29,7 +29,7 @@ jobs:
       STAGING_URL: ${{ vars.STAGING_URL }}
       STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - run: mkdir -p results && date +%s > results/started
 
@@ -48,17 +48,17 @@ jobs:
         if: hashFiles('tests/api/test_*.py') != '' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
-          pip install pytest httpx
+          pip install -c .github/qa-agents/requirements.txt pytest httpx
           pytest tests/api --junitxml=results/api.xml 2>&1 | tee results/api.log
 
       # Not on push: from GitHub's US runners to staging-1 (India) it takes about 27 minutes.
       # Runs nightly and when asked for (/test <app> api).
       - name: Schemathesis
         id: schema
-        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && inputs.reason != 'deploy' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
-          pip install schemathesis
+          pip install -c .github/qa-agents/requirements.txt schemathesis
           # GET only: fuzzing POSTs on staging would sign up junk users or send password-reset
           # emails to random addresses. Only server errors fail the run; agents have no
           # credentials, so undocumented 401s are expected and are not bugs.
@@ -69,7 +69,7 @@ jobs:
         if: hashFiles('tests/e2e/**/*.spec.ts') != '' && contains(fromJSON('["all", "e2e"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
-          npm install --no-save @playwright/test @axe-core/playwright
+          npm install --no-save "@playwright/test@$(jq -r '.dependencies["@playwright/test"]' .github/qa-agents/package.json)" "@axe-core/playwright@$(jq -r '.dependencies["@axe-core/playwright"]' .github/qa-agents/package.json)"
           npx playwright install --with-deps chromium
           npx playwright test -c tests/e2e 2>&1 | tee results/e2e.log
 
@@ -84,14 +84,19 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
           curl -fsSL "$STAGING_APK_URL" -o app.apk
-          curl -fsSL https://get.maestro.mobile.dev | bash
-          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          # Pinned release, checked against its SHA-256 (bump both by hand; Dependabot can't).
+          MAESTRO_VERSION=2.12.1
+          MAESTRO_SHA256=54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7
+          curl -fsSL -o maestro.zip "https://github.com/mobile-dev-inc/Maestro/releases/download/cli-$MAESTRO_VERSION/maestro.zip"
+          echo "$MAESTRO_SHA256  maestro.zip" | sha256sum -c -
+          unzip -q maestro.zip -d "$HOME"
+          echo "$HOME/maestro/bin" >> "$GITHUB_PATH"
 
       - name: Mobile tests (Maestro)
         id: mobile
         if: steps.mobile_setup.outcome == 'success'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
           arch: x86_64
@@ -105,7 +110,7 @@ jobs:
       #             LOAD_CAPACITY_URL, which must not be staging (it shares a box with other apps).
       - name: Set up k6
         if: hashFiles('tests/load/*.js') != '' && contains(fromJSON('["load", "capacity"]'), inputs.suite)
-        uses: grafana/setup-k6-action@v1
+        uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1.2.2
 
       - name: Load tests (k6)
         id: load
@@ -135,7 +140,7 @@ jobs:
       - name: Upload results
         id: upload
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-results
           path: |
