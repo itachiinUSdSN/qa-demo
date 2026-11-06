@@ -1,0 +1,7 @@
+# Test-setup files that decide how every test signs in and runs. Agents must not change them;
+# qa-auto-merge.yml and healer-guard.yml hold or fail a PR that does. This file requests the owner's
+# review; it only blocks merging where branch protection requires code-owner review.
+/tests/e2e/playwright.config.ts @itachiinUSdSN
+/tests/e2e/auth.ts              @itachiinUSdSN
+/tests/api/conftest.py          @itachiinUSdSN
+/tests/fixtures/qa-roles.md     @itachiinUSdSN

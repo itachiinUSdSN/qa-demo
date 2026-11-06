@@ -1,6 +1,7 @@
 name: Healer guard
 
-# A Healer PR may change locators and waits in exactly one test file, never an assertion.
+# A Healer PR may change locators and waits in exactly one test file, never an assertion, a matcher,
+# a skip/only marker or a protected test-setup file.
 on:
   pull_request:
 
@@ -27,7 +28,19 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          if git diff -U0 "origin/$BASE...HEAD" | grep -vE '^(\+\+\+|---) ' | grep -E '^[+-]' | grep -E 'expect\(|assert'; then
-            echo "::error::A Healer PR may not change an expect( or assert line"; exit 1
+          if git diff -U0 "origin/$BASE...HEAD" | grep -vE '^(\+\+\+|---) ' | grep -E '^[+-]' | grep -E 'expect\(|assert|\.(toBe|toEqual|toHave|toContain|toMatch)[A-Za-z]*\(|status_code *=='; then
+            echo "::error::A Healer PR may not change an expect(, assert or matcher line"; exit 1
           fi
-          echo "No assertion lines changed."
+          echo "No assertion or matcher lines changed."
+
+      - name: No skip, only or protected file
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff -U0 "origin/$BASE...HEAD" | grep -E '^\+[^+]' | grep -E 'test\.(skip|fixme)\b|\.only\b|describe\.skip|@pytest\.mark\.skip|skipif|xfail|pytest\.skip\('; then
+            echo "::error::A Healer PR may not add a skip, fixme, only or xfail"; exit 1
+          fi
+          if git diff --name-only "origin/$BASE...HEAD" | grep -xE 'tests/e2e/playwright\.config\.ts|tests/e2e/auth\.ts|tests/api/conftest\.py|tests/fixtures/qa-roles\.md'; then
+            echo "::error::A Healer PR may not change a protected test-setup file"; exit 1
+          fi
+          echo "No skip/only added, no protected file changed."
