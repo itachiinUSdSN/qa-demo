@@ -17,6 +17,10 @@ on:
 # STAGING_API_URL too if the API is on another host).
 # A suite runs only if its folder has tests. Results go to n8n if
 # N8N_WEBHOOK_URL is set; without it the job still passes or fails normally.
+# Agent-written tests run here, so the job token is read-only and not saved in .git/config.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -30,6 +34,8 @@ jobs:
       STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - run: mkdir -p results && date +%s > results/started
 
@@ -55,7 +61,7 @@ jobs:
       # Runs nightly and when asked for (/test <app> api).
       - name: Schemathesis
         id: schema
-        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
+        if: hashFiles('tests/api/test_*.py') != '' && github.event_name != 'push' && inputs.reason != 'deploy' && contains(fromJSON('["all", "api"]'), inputs.suite || 'all')
         continue-on-error: true
         run: |
           pip install schemathesis

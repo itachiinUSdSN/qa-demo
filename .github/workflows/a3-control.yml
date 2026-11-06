@@ -1,0 +1,12 @@
+name: A3 control (old checkout)
+on:
+  push:
+    branches: [a3-check]
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.QA_BOT_TOKEN }}
+      - run: pip install pytest && (pytest tests/conftest.py -q || true) && cat tests/a3-probe.txt
