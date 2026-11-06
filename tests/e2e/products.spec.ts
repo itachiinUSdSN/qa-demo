@@ -9,7 +9,7 @@ const products: { names: string[] } = JSON.parse(
 
 test('page lists the three products', async ({ page }) => {
   await page.goto('./');
-  const items = page.getByRole('listitem');
+  const items = page.locator('li');
   await expect(items).toHaveCount(products.names.length);
   for (const name of products.names) {
     const item = page.getByRole('listitem').filter({ hasText: name });
