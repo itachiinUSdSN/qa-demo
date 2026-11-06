@@ -1,3 +1,4 @@
+// A1 check plant (qa/healer-a1plant): comment only, no behaviour change.
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { readFileSync } from 'fs';
