@@ -1,0 +1,2 @@
+# r2test2 B3 CHECK plant: a known-vulnerable version (CVE-2020-14343), never installed.
+pyyaml==5.3.1
