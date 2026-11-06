@@ -70,7 +70,7 @@ jobs:
           semgrep scan --metrics=off --quiet --config p/python --config p/typescript --config p/react --config p/owasp-top-ten \
             --exclude node_modules --exclude .venv --json -o results/security/semgrep.json . && st semgrep ok || st semgrep failed
           if git ls-files '*.py' | grep -q .; then
-            bandit -q -r . -x ./node_modules,./.venv,./tests -f json -o results/security/bandit.json; rc=$?
+            rc=0; bandit -q -r . -x ./node_modules,./.venv,./tests -f json -o results/security/bandit.json || rc=$?
             [ $rc -le 1 ] && st bandit ok || st bandit failed   # 1 = issues found
           else st bandit skipped; fi
 
@@ -89,7 +89,7 @@ jobs:
             echo "$f" > "results/security/npm-audit-$n.src"
           done
           [ $n = 0 ] && st npm-audit skipped || { [ $rc = 0 ] && st npm-audit ok || st npm-audit failed; }
-          osv-scanner scan source -r --format json --output results/security/osv.json . ; rc=$?
+          rc=0; osv-scanner scan source -r --format json --output results/security/osv.json . || rc=$?
           [ $rc -le 1 ] && st osv-scanner ok || { [ $rc = 128 ] && st osv-scanner skipped || st osv-scanner failed; }   # 1 = vulns, 128 = nothing to scan
 
       - name: Secrets (gitleaks, code and history)
@@ -108,7 +108,7 @@ jobs:
         if: env.SCOPE == 'full' && env.STAGING_URL != ''
         run: |
           chmod 777 results/security
-          docker run --rm -v "$PWD/results/security:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$STAGING_URL" -J zap.json -I -m 3; rc=$?
+          docker run --rm -v "$PWD/results/security:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$STAGING_URL" -J zap.json -I -m 3 || true
           [ -s results/security/zap.json ] && echo "zap-baseline ok" >> results/security/status.txt || echo "zap-baseline failed" >> results/security/status.txt
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
