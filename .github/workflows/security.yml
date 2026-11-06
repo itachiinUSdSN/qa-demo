@@ -1,0 +1,217 @@
+name: Security
+
+# Free, deterministic scanners; the AI only triages what they find (n8n W1, suite security).
+#   fast (push to the staging branch): Semgrep + Bandit, pip-audit + npm audit + osv-scanner, gitleaks
+#   full (nightly from W4, or /test <app> security): fast + Trivy fs/config + OWASP ZAP baseline
+# ZAP baseline is passive only (it spiders and reads responses, never attacks). No active scan here.
+# Raw reports go to results/security/ (artifact). n8n gets one findings list: tool, rule, file, line,
+# severity and a short title. gitleaks runs with --redact and only its rule, file and line are sent,
+# so a secret value never leaves the scanner.
+# Versions are pinned: pip tools in .github/qa-agents/requirements.txt (Dependabot), binaries and the
+# ZAP image below (by hand: version + SHA-256 / digest).
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "fast or full"
+        default: full
+      reason:
+        description: "Why this run: manual or nightly"
+        default: manual
+
+permissions:
+  contents: read
+
+env:
+  OSV_VERSION: 2.7.0
+  OSV_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  TRIVY_VERSION: 0.76.2
+  TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:8dc78e39fafc3281ac2cf54eab05c3ea02721a1ea58f1c135f981a57f4e218b1 # 2.15.0
+
+jobs:
+  scan:
+    # On push, only the branch deployed to staging (the default branch) is scanned.
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      SCOPE: ${{ github.event_name == 'push' && 'fast' || inputs.scope || 'full' }}
+      STAGING_URL: ${{ vars.STAGING_URL }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0   # gitleaks scans the history too
+          persist-credentials: false
+
+      - name: Install scanners
+        run: |
+          mkdir -p results/security "$HOME/bin" && echo "$HOME/bin" >> "$GITHUB_PATH"
+          pip install -q -c .github/qa-agents/requirements.txt semgrep bandit pip-audit
+          curl -fsSL -o "$HOME/bin/osv-scanner" "https://github.com/google/osv-scanner/releases/download/v$OSV_VERSION/osv-scanner_linux_amd64"
+          echo "$OSV_SHA256  $HOME/bin/osv-scanner" | sha256sum -c - && chmod +x "$HOME/bin/osv-scanner"
+          curl -fsSL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  gl.tgz" | sha256sum -c - && tar -xzf gl.tgz -C "$HOME/bin" gitleaks && rm gl.tgz
+          if [ "$SCOPE" = full ]; then
+            curl -fsSL -o tv.tgz "https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+            echo "$TRIVY_SHA256  tv.tgz" | sha256sum -c - && tar -xzf tv.tgz -C "$HOME/bin" trivy && rm tv.tgz
+          fi
+
+      # Each scanner records ok/failed in results/security/status.txt and never stops the others.
+      - name: Code (Semgrep, Bandit)
+        run: |
+          st() { echo "$1 $2" >> results/security/status.txt; }
+          semgrep scan --metrics=off --quiet --config p/python --config p/typescript --config p/react --config p/owasp-top-ten \
+            --exclude node_modules --exclude .venv --json -o results/security/semgrep.json . && st semgrep ok || st semgrep failed
+          if git ls-files '*.py' | grep -q .; then
+            bandit -q -r . -x ./node_modules,./.venv,./tests -f json -o results/security/bandit.json; rc=$?
+            [ $rc -le 1 ] && st bandit ok || st bandit failed   # 1 = issues found
+          else st bandit skipped; fi
+
+      - name: Dependencies (pip-audit, npm audit, osv-scanner)
+        run: |
+          st() { echo "$1 $2" >> results/security/status.txt; }
+          n=0; rc=0
+          for f in $(git ls-files '*requirements*.txt'); do
+            n=$((n+1)); pip-audit -r "$f" --no-deps --disable-pip --progress-spinner off -f json -o "results/security/pip-audit-$n.json" || [ -s "results/security/pip-audit-$n.json" ] || rc=1
+            echo "$f" > "results/security/pip-audit-$n.src"
+          done
+          [ $n = 0 ] && st pip-audit skipped || { [ $rc = 0 ] && st pip-audit ok || st pip-audit failed; }
+          n=0; rc=0
+          for f in $(git ls-files '*package-lock.json' | grep -v node_modules); do
+            n=$((n+1)); (cd "$(dirname "$f")" && npm audit --omit=dev --json) > "results/security/npm-audit-$n.json" || [ -s "results/security/npm-audit-$n.json" ] || rc=1
+            echo "$f" > "results/security/npm-audit-$n.src"
+          done
+          [ $n = 0 ] && st npm-audit skipped || { [ $rc = 0 ] && st npm-audit ok || st npm-audit failed; }
+          osv-scanner scan source -r --format json --output results/security/osv.json . ; rc=$?
+          [ $rc -le 1 ] && st osv-scanner ok || { [ $rc = 128 ] && st osv-scanner skipped || st osv-scanner failed; }   # 1 = vulns, 128 = nothing to scan
+
+      - name: Secrets (gitleaks, code and history)
+        run: |
+          gitleaks git --redact --no-banner --exit-code 0 --report-format json --report-path results/security/gitleaks.json . \
+            && echo "gitleaks ok" >> results/security/status.txt || echo "gitleaks failed" >> results/security/status.txt
+
+      - name: Containers and config (Trivy)
+        if: env.SCOPE == 'full'
+        run: |
+          st() { echo "$1 $2" >> results/security/status.txt; }
+          trivy fs --quiet --scanners vuln --format json -o results/security/trivy-fs.json . && st trivy-fs ok || st trivy-fs failed
+          trivy config --quiet --format json -o results/security/trivy-config.json . && st trivy-config ok || st trivy-config failed
+
+      - name: Running app (ZAP baseline, passive)
+        if: env.SCOPE == 'full' && env.STAGING_URL != ''
+        run: |
+          chmod 777 results/security
+          docker run --rm -v "$PWD/results/security:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$STAGING_URL" -J zap.json -I -m 3; rc=$?
+          [ -s results/security/zap.json ] && echo "zap-baseline ok" >> results/security/status.txt || echo "zap-baseline failed" >> results/security/status.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        id: upload
+        if: always()
+        with:
+          name: security-results
+          path: results/security/
+          retention-days: 30
+
+      - name: Report
+        if: always()
+        env:
+          REASON: ${{ inputs.reason || github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+          N8N_WEBHOOK_TOKEN: ${{ secrets.N8N_WEBHOOK_TOKEN }}
+        run: |
+          python3 - <<'PY' > results/security-summary.json
+          import glob, json, os
+          R = "results/security/"
+          def load(p):
+              try: return json.load(open(p))
+              except Exception: return None
+          SEV = {"critical": "critical", "high": "high", "error": "high", "medium": "medium", "moderate": "medium",
+                 "warning": "medium", "low": "low", "info": "low", "note": "low", "unknown": "medium"}
+          sev = lambda s: SEV.get(str(s or "").lower(), "medium")
+          out = []
+          def add(tool, rule, file, line, severity, title):
+              out.append({"tool": tool, "rule": str(rule)[:120], "file": str(file or "")[:200], "line": line,
+                          "severity": sev(severity), "title": str(title or "")[:200]})
+          d = load(R + "semgrep.json") or {}
+          for r in d.get("results", []):
+              add("semgrep", r.get("check_id"), r.get("path"), r.get("start", {}).get("line"),
+                  r.get("extra", {}).get("severity"), r.get("extra", {}).get("message", "").split("\n")[0])
+          d = load(R + "bandit.json") or {}
+          for r in d.get("results", []):
+              add("bandit", r.get("test_id"), r.get("filename", "").lstrip("./"), r.get("line_number"),
+                  r.get("issue_severity"), r.get("issue_text"))
+          for p in sorted(glob.glob(R + "pip-audit-*.json")):
+              src = open(p[:-5] + ".src").read().strip()
+              for dep in (load(p) or {}).get("dependencies", []):
+                  for v in dep.get("vulns", []):
+                      add("pip-audit", v.get("id"), src, None, "high",
+                          f"{dep.get('name')} {dep.get('version')} (fix: {', '.join(v.get('fix_versions') or []) or 'none'})")
+          for p in sorted(glob.glob(R + "npm-audit-*.json")):
+              src = open(p[:-5] + ".src").read().strip()
+              for name, v in ((load(p) or {}).get("vulnerabilities") or {}).items():
+                  via = [x for x in v.get("via", []) if isinstance(x, dict)]
+                  rule = (via[0].get("url", "").rsplit("/", 1)[-1] if via else "") or f"npm:{name}"
+                  add("npm-audit", rule, src, None, v.get("severity"),
+                      f"{name} {v.get('range', '')}: {via[0].get('title', '') if via else 'via ' + ', '.join(map(str, v.get('via', [])))}")
+          for res in (load(R + "osv.json") or {}).get("results", []):
+              src = res.get("source", {}).get("path", "")
+              for pkg in res.get("packages", []):
+                  groups = {i: g.get("max_severity") for g in pkg.get("groups", []) for i in g.get("ids", [])}
+                  for v in pkg.get("vulnerabilities", []):
+                      score = groups.get(v.get("id"))
+                      s = ("critical" if float(score) >= 9 else "high" if float(score) >= 7 else "medium" if float(score) >= 4 else "low") if score else (v.get("database_specific") or {}).get("severity")
+                      p_ = pkg.get("package", {})
+                      add("osv-scanner", v.get("id"), os.path.relpath(src) if src.startswith("/") else src, None, s,
+                          f"{p_.get('name')} {p_.get('version')}: {v.get('summary', '')}")
+          for r in load(R + "gitleaks.json") or []:
+              # Rule, file and line only: never the match, the secret or the commit message.
+              add("gitleaks", r.get("RuleID"), r.get("File"), r.get("StartLine"), "high", f"possible secret ({r.get('RuleID')})")
+          for res in (load(R + "trivy-fs.json") or {}).get("Results", []):
+              for v in res.get("Vulnerabilities") or []:
+                  add("trivy", v.get("VulnerabilityID"), res.get("Target"), None, v.get("Severity"),
+                      f"{v.get('PkgName')} {v.get('InstalledVersion')}: {v.get('Title', '')}")
+          for res in (load(R + "trivy-config.json") or {}).get("Results", []):
+              for m in res.get("Misconfigurations") or []:
+                  if m.get("Status") == "FAIL":
+                      add("trivy-config", m.get("ID"), res.get("Target"), (m.get("CauseMetadata") or {}).get("StartLine"),
+                          m.get("Severity"), m.get("Title"))
+          RISK = {"3": "high", "2": "medium", "1": "low", "0": "low"}
+          for site in (load(R + "zap.json") or {}).get("site", []):
+              for a in site.get("alerts", []):
+                  if str(a.get("riskcode")) == "0":
+                      continue   # informational
+                  add("zap-baseline", a.get("pluginid"), "(staging)", None, RISK.get(str(a.get("riskcode")), "low"),
+                      f"{a.get('name')} ({a.get('count', len(a.get('instances', [])))} URLs)")
+          # One finding per app / tool / rule / file (the Jira fingerprint); keep the first line seen.
+          seen, findings = set(), []
+          for f in out:
+              k = (f["tool"], f["rule"], f["file"])
+              if k not in seen:
+                  seen.add(k); findings.append(f)
+          status = dict(l.split() for l in open(R + "status.txt").read().split("\n") if l.strip()) if os.path.exists(R + "status.txt") else {}
+          counts = {s: sum(1 for f in findings if f["severity"] == s) for s in ("critical", "high", "medium", "low")}
+          print(json.dumps({
+              "repo": os.environ.get("GITHUB_REPOSITORY"), "suite": "security", "scope": os.environ["SCOPE"],
+              "status": "failure" if findings or "failed" in status.values() else "success",
+              "branch": os.environ.get("GITHUB_REF_NAME"), "commit_sha": os.environ.get("GITHUB_SHA"),
+              "reason": os.environ["REASON"], "run_url": os.environ["RUN_URL"],
+              "artifact_url": os.environ.get("ARTIFACT_URL") or os.environ["RUN_URL"],
+              "tools": status, "counts": counts, "total": len(findings),
+              "findings": findings[:200], "truncated": len(findings) > 200,
+          }))
+          PY
+          python3 -c "import json; d=json.load(open('results/security-summary.json')); print(json.dumps({k: d[k] for k in ('scope','tools','counts','total','truncated')}, indent=1))"
+          if [ -n "$N8N_WEBHOOK_URL" ]; then
+            curl -fsS -X POST -H 'Content-Type: application/json' -H "X-QA-Token: $N8N_WEBHOOK_TOKEN" \
+              --data @results/security-summary.json "$N8N_WEBHOOK_URL" \
+              || echo "::warning::Could not send results to n8n; the scan itself is unaffected."
+          fi
