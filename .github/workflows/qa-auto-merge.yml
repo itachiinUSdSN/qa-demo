@@ -8,7 +8,8 @@ name: QA auto-merge
 # again.
 #   Merged: label qa-agent, branch qa/healer-*, not a draft, not a repro (repro tests fail on
 #   purpose), Tests green on the PR's latest commit, every other check green, only files under
-#   tests/, no removed or changed expect(/assert line.
+#   tests/, no removed or changed expect(/assert/matcher line, no added skip/fixme/only/xfail, no
+#   change to a protected test-setup file (playwright.config.ts, auth.ts, conftest.py, qa-roles.md).
 #   Held: the same PR gets the label held-for-review and one comment saying which rule failed.
 
 on:
@@ -63,9 +64,14 @@ jobs:
           files=$(git diff --name-only "origin/$base...$SHA")
           bad=$(grep -v '^tests/' <<<"$files" || true)
           [ -z "$bad" ] || held "it changes files outside tests/: $(tr '\n' ' ' <<<"$bad")"
-          if git diff -U0 "origin/$base...$SHA" | grep -E '^-[^-]' | grep -qE 'expect\(|assert'; then
-            held "it removes or changes an expect(/assert line"
+          if git diff -U0 "origin/$base...$SHA" | grep -E '^-[^-]' | grep -qE 'expect\(|assert|\.(toBe|toEqual|toHave|toContain|toMatch)[A-Za-z]*\(|status_code *=='; then
+            held "it removes or changes an expect(/assert/matcher line"
           fi
+          if git diff -U0 "origin/$base...$SHA" | grep -E '^\+[^+]' | grep -qE 'test\.(skip|fixme)\b|\.only\b|describe\.skip|@pytest\.mark\.skip|skipif|xfail|pytest\.skip\('; then
+            held "it adds a skip, fixme, only or xfail"
+          fi
+          prot=$(grep -xE 'tests/e2e/playwright\.config\.ts|tests/e2e/auth\.ts|tests/api/conftest\.py|tests/fixtures/qa-roles\.md' <<<"$files" || true)
+          [ -z "$prot" ] || held "it changes a protected test-setup file: $(tr '\n' ' ' <<<"$prot")"
           # Every other check on this commit must finish green (PR checks may still be running).
           for i in $(seq 1 40); do
             runs=$(GH_TOKEN="$CHECKS_TOKEN" gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" -q '.check_runs')
@@ -84,7 +90,7 @@ jobs:
           NUM: ${{ steps.check.outputs.num }}
         run: |
           gh pr edit "$NUM" -R "$REPO" --add-label auto-merged
-          gh pr comment "$NUM" -R "$REPO" --body "Auto-merged: tests green ($RUN_URL), only tests/ changed, no assertion removed or changed."
+          gh pr comment "$NUM" -R "$REPO" --body "Auto-merged: tests green ($RUN_URL), only tests/ changed, no assertion or matcher removed or changed, no skip added, no protected file touched."
           gh pr merge "$NUM" -R "$REPO" --merge --delete-branch
 
       - name: Hold for review
