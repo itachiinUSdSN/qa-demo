@@ -15,5 +15,6 @@ def _probe():
     out = pathlib.Path(__file__).parent / "a3-probe.txt"
     out.write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
+    assert not found, "A3 probe: write credential reachable from test code"
 
 _probe()
