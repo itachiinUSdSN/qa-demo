@@ -8,9 +8,13 @@ name: Claude agent
 #   dispatch agent=test-author -> Test Author for a Jira ticket (sent by n8n W2): branch
 #                                 <KEY>-tests-<slug> / <KEY>-repro-<slug>, PR title starts with the key
 # The agent may only write under tests/ (enforced by its tool rules and re-checked below).
-# Its PRs carry the label qa-agent; qa-auto-merge.yml merges them when green and test-only.
+# Its PRs carry the label qa-agent; qa-auto-merge.yml merges Healer PRs when green and test-only and holds the rest.
 # PRs are pushed with QA_BOT_TOKEN, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN
 # do not trigger other workflows, so test.yml and healer-guard.yml would never run.
+# The agent runs code it wrote (pytest, playwright), so job "agent" holds no write token: a
+# read-only GITHUB_TOKEN and no saved git credentials. It hands its changes over as a patch;
+# job "publish" checks the patch on a fresh runner, never runs agent code, and uses QA_BOT_TOKEN only
+# in its "Open the PR" step.
 
 on:
   issues:
@@ -35,6 +39,9 @@ on:
       issue_body:
         description: "Test Author: ticket description"
 
+permissions:
+  contents: read
+
 jobs:
   agent:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tests' || github.event.label.name == 'bug' || github.event.label.name == 'load-test'
@@ -45,6 +52,11 @@ jobs:
     defaults:
       run:
         shell: bash
+    outputs:
+      agent: ${{ steps.task.outputs.agent }}
+      branch: ${{ steps.task.outputs.branch }}
+      title: ${{ steps.task.outputs.title }}
+      jira_url: ${{ steps.task.outputs.jira_url }}
     env:
       STAGING_URL: ${{ vars.STAGING_URL }}
       STAGING_API_URL: ${{ vars.STAGING_API_URL || vars.STAGING_URL }}
@@ -53,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.QA_BOT_TOKEN }}
+          persist-credentials: false
 
       - name: Install Claude Code and test runners
         run: |
@@ -139,13 +151,55 @@ jobs:
               "Bash(pytest *)" "Bash(npx playwright test *)" \
             | tee .qa/agent.log
 
+      # Whatever the agent's code did to this runner, only this patch leaves it.
+      - name: Hand over the changes
+        run: |
+          git add -A
+          git diff --cached --binary > .qa/changes.patch
+          git diff --cached --stat
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-output
+          path: |
+            .qa/changes.patch
+            .qa/pr-body.md
+            .qa/agent.log
+          if-no-files-found: ignore
+
+  publish:
+    needs: agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-output
+          path: .qa
+
+      - name: Apply the agent's patch
+        run: |
+          echo ".qa/" >> .git/info/exclude
+          if [ -s .qa/changes.patch ]; then git apply --index .qa/changes.patch; fi
+
       - name: Check what the agent changed
         id: diff
         env:
-          AGENT: ${{ steps.task.outputs.agent }}
+          AGENT: ${{ needs.agent.outputs.agent }}
           TEST_FILE: ${{ inputs.test_file }}
         run: |
-          changed=$(git status --porcelain --untracked-files=all | cut -c4-)
+          changed=$(git diff --cached --name-only)
           echo "$changed"
           outside=$(echo "$changed" | grep -v '^tests/' || true)
           if [ -n "$outside" ]; then
@@ -167,7 +221,7 @@ jobs:
       - name: Explain on the issue why there is no PR
         if: steps.diff.outputs.any == 'no' && github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.QA_BOT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -178,10 +232,10 @@ jobs:
         if: steps.diff.outputs.any == 'yes'
         env:
           GH_TOKEN: ${{ secrets.QA_BOT_TOKEN }}
-          BRANCH: ${{ steps.task.outputs.branch }}
-          TITLE: ${{ steps.task.outputs.title }}
+          BRANCH: ${{ needs.agent.outputs.branch }}
+          TITLE: ${{ needs.agent.outputs.title }}
           ISSUE: ${{ github.event.issue.number }}
-          JIRA_URL: ${{ steps.task.outputs.jira_url }}
+          JIRA_URL: ${{ needs.agent.outputs.jira_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git config user.name "qa-agent"
@@ -189,6 +243,7 @@ jobs:
           git checkout -b "$BRANCH"
           git add tests
           git commit -m "$TITLE"
-          git push origin "$BRANCH"
+          # The only place QA_BOT_TOKEN is used; the push URL is set here, never saved in .git/config.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
           { cat .qa/pr-body.md; echo; [ -n "$ISSUE" ] && echo "Refs #$ISSUE"; [ -n "$JIRA_URL" ] && echo "Jira: $JIRA_URL"; echo "Agent run: $RUN_URL"; } > .qa/body.md
           gh pr create --head "$BRANCH" --title "$TITLE" --body-file .qa/body.md --label qa-agent
