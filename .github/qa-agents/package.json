@@ -1,0 +1,10 @@
+{
+  "name": "qa-agents-pins",
+  "private": true,
+  "description": "Exact versions of the npm tools the qa-agents workflows install. Dependabot updates them; the workflows read them with jq.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.319",
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.0"
+  }
+}
