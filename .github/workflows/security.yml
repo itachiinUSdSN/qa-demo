@@ -137,8 +137,19 @@ jobs:
           SEV = {"critical": "critical", "high": "high", "error": "high", "medium": "medium", "moderate": "medium",
                  "warning": "medium", "low": "low", "info": "low", "note": "low", "unknown": "medium"}
           sev = lambda s: SEV.get(str(s or "").lower(), "medium")
-          out = []
-          def add(tool, rule, file, line, severity, title):
+          out, vulns = [], {}
+          # r2test2's own files in the app repo are not the app's findings (the platform is scanned in its own repo).
+          PLATFORM = (".github/qa-agents/", ".github/dependabot.yml")
+          def add(tool, rule, file, line, severity, title, ids=()):
+              if str(file or "").startswith(PLATFORM):
+                  return
+              # One vulnerability, one finding: pip-audit, npm audit and osv-scanner (and OSV's own GHSA/PYSEC
+              # duplicates) report the same advisory under different ids; the first tool to report it wins.
+              if ids:
+                  ids = {str(i) for i in ids if i}
+                  if any(ids & seen for seen in vulns.get(file, [])):
+                      return
+                  vulns.setdefault(file, []).append(ids)
               out.append({"tool": tool, "rule": str(rule)[:120], "file": str(file or "")[:200], "line": line,
                           "severity": sev(severity), "title": str(title or "")[:200]})
           d = load(R + "semgrep.json") or {}
@@ -147,21 +158,23 @@ jobs:
                   r.get("extra", {}).get("severity"), r.get("extra", {}).get("message", "").split("\n")[0])
           d = load(R + "bandit.json") or {}
           for r in d.get("results", []):
-              add("bandit", r.get("test_id"), r.get("filename", "").lstrip("./"), r.get("line_number"),
+              add("bandit", r.get("test_id"), r.get("filename", "").removeprefix("./"), r.get("line_number"),
                   r.get("issue_severity"), r.get("issue_text"))
           for p in sorted(glob.glob(R + "pip-audit-*.json")):
               src = open(p[:-5] + ".src").read().strip()
               for dep in (load(p) or {}).get("dependencies", []):
                   for v in dep.get("vulns", []):
                       add("pip-audit", v.get("id"), src, None, "high",
-                          f"{dep.get('name')} {dep.get('version')} (fix: {', '.join(v.get('fix_versions') or []) or 'none'})")
+                          f"{dep.get('name')} {dep.get('version')} (fix: {', '.join(v.get('fix_versions') or []) or 'none'})",
+                          [v.get("id"), *(v.get("aliases") or [])])
           for p in sorted(glob.glob(R + "npm-audit-*.json")):
               src = open(p[:-5] + ".src").read().strip()
               for name, v in ((load(p) or {}).get("vulnerabilities") or {}).items():
                   via = [x for x in v.get("via", []) if isinstance(x, dict)]
                   rule = (via[0].get("url", "").rsplit("/", 1)[-1] if via else "") or f"npm:{name}"
                   add("npm-audit", rule, src, None, v.get("severity"),
-                      f"{name} {v.get('range', '')}: {via[0].get('title', '') if via else 'via ' + ', '.join(map(str, v.get('via', [])))}")
+                      f"{name} {v.get('range', '')}: {via[0].get('title', '') if via else 'via ' + ', '.join(map(str, v.get('via', [])))}",
+                      [rule] if via else [])
           for res in (load(R + "osv.json") or {}).get("results", []):
               src = res.get("source", {}).get("path", "")
               for pkg in res.get("packages", []):
@@ -171,7 +184,7 @@ jobs:
                       s = ("critical" if float(score) >= 9 else "high" if float(score) >= 7 else "medium" if float(score) >= 4 else "low") if score else (v.get("database_specific") or {}).get("severity")
                       p_ = pkg.get("package", {})
                       add("osv-scanner", v.get("id"), os.path.relpath(src) if src.startswith("/") else src, None, s,
-                          f"{p_.get('name')} {p_.get('version')}: {v.get('summary', '')}")
+                          f"{p_.get('name')} {p_.get('version')}: {v.get('summary', '')}", [v.get("id"), *(v.get("aliases") or [])])
           for r in load(R + "gitleaks.json") or []:
               # Rule, file and line only: never the match, the secret or the commit message.
               add("gitleaks", r.get("RuleID"), r.get("File"), r.get("StartLine"), "high", f"possible secret ({r.get('RuleID')})")
