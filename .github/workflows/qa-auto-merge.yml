@@ -1,12 +1,14 @@
 name: QA auto-merge
 
-# Merges an agent's test PR on its own once its Tests run passes, if it changes only tests and
-# weakens nothing; anything else is held for a person. Runs on workflow_run, so the rules always
-# come from the default branch: a PR cannot change the rules that judge it. The merge uses
-# QA_BOT_TOKEN so the push to the default branch runs the tests again.
-#   Merged: label qa-agent, not a draft, not a repro (repro tests fail on purpose), Tests green on
-#   the PR's latest commit, every other check green, only files under tests/, no removed or
-#   changed expect(/assert line.
+# Merges a Healer PR (branch qa/healer-*) on its own once its Tests run passes, if it changes only
+# tests and weakens nothing; every other agent PR (Test Author, Coverage, Load, Persona) and anything
+# else is held for a person, because agent-written expected values need a human to check them.
+# Runs on workflow_run, so the rules always come from the default branch: a PR cannot change the
+# rules that judge it. The merge uses QA_BOT_TOKEN so the push to the default branch runs the tests
+# again.
+#   Merged: label qa-agent, branch qa/healer-*, not a draft, not a repro (repro tests fail on
+#   purpose), Tests green on the PR's latest commit, every other check green, only files under
+#   tests/, no removed or changed expect(/assert line.
 #   Held: the same PR gets the label held-for-review and one comment saying which rule failed.
 
 on:
@@ -56,6 +58,7 @@ jobs:
           [ "$(jq -r .isDraft <<<"$pr")" = false ] || held "the PR is a draft"
           [ "$(jq -r .headRefOid <<<"$pr")" = "$SHA" ] || { echo "#$num has newer commits; their own run decides."; exit 0; }
           case "$BRANCH" in *repro*) held "repro PRs show a bug and wait for its fix";; esac
+          case "$BRANCH" in qa/healer-*) ;; *) held "only Healer PRs auto-merge; agent-written tests and expected values need a person to check them";; esac
           git fetch -q origin "$base" "$SHA"
           files=$(git diff --name-only "origin/$base...$SHA")
           bad=$(grep -v '^tests/' <<<"$files" || true)
