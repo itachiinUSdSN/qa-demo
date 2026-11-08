@@ -111,7 +111,7 @@ jobs:
           docker run --rm -v "$PWD/results/security:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$STAGING_URL" -J zap.json -I -m 3 || true
           [ -s results/security/zap.json ] && echo "zap-baseline ok" >> results/security/status.txt || echo "zap-baseline failed" >> results/security/status.txt
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         if: always()
         with:
