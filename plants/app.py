@@ -21,7 +21,10 @@ HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": "no-store",
 }
-PAGE = b"<!doctype html><html lang=en><head><meta charset=utf-8><title>Plants</title></head><body><h1>Plants</h1></body></html>"
+PAGES = {  # a few linked HTML pages, so ZAP's passive header check sees more than one response
+    path: f"<!doctype html><html lang=en><head><meta charset=utf-8><title>{title}</title></head><body><h1>{title}</h1>"
+          '<p><a href="/">Plants</a> <a href="/ferns">Ferns</a> <a href="/cacti">Cacti</a> <a href="/care">Care</a></p></body></html>'.encode()
+    for path, title in {"/": "Plants", "/ferns": "Ferns", "/cacti": "Cacti", "/care": "Care"}.items()}
 ORDERS = [{"id": 1, "plant": "fern", "qty": 2}]
 
 
@@ -38,8 +41,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/":
-            return self.reply(200, PAGE, "text/html; charset=utf-8")
+        if self.path in PAGES:
+            return self.reply(200, PAGES[self.path], "text/html; charset=utf-8")
         if self.path == "/api/orders":
             # PLANT 2: the sign-in check is missing on purpose. The fix is:
             # if self.headers.get("Authorization") != f"Bearer {TOKEN}": return self.reply(401, b'{"detail": "sign in"}')
