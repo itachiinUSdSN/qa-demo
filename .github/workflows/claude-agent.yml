@@ -98,7 +98,8 @@ jobs:
           JIRA_TITLE: ${{ inputs.issue_title }}
           JIRA_BODY: ${{ inputs.issue_body }}
         run: |
-          mkdir -p .qa && echo ".qa/" >> .git/info/exclude
+          # .qa/ is the agent's scratch space; Python caches from pytest runs are never part of its patch.
+          mkdir -p .qa && printf '.qa/\n__pycache__/\n*.pyc\n' >> .git/info/exclude
           if [ "$EVENT" = workflow_dispatch ] && [ "$AGENT_IN" = test-author ]; then
             [[ "$JIRA_KEY" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || { echo "::error::jira_key must look like QA-12"; exit 1; }
             case "$MODE" in story|bug|security) ;; *) echo "::error::mode must be story, bug or security"; exit 1;; esac
