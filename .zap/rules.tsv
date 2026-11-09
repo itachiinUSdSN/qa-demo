@@ -1,0 +1,7 @@
+10020	IGNORE	Anti-clickjacking header: GitHub Pages cannot set response headers (accepted, QA-96)
+10021	IGNORE	X-Content-Type-Options: GitHub Pages cannot set response headers (accepted, QA-95)
+10035	IGNORE	HSTS: GitHub Pages cannot set response headers (accepted, QA-94)
+10038	IGNORE	Content-Security-Policy header: GitHub Pages cannot set response headers (accepted, QA-92)
+10055	IGNORE	CSP wildcard: comes from GitHub Pages' own headers, not this site (accepted, QA-91)
+10063	IGNORE	Permissions-Policy: GitHub Pages cannot set response headers (accepted, QA-97)
+10098	IGNORE	Cross-domain misconfiguration: GitHub Pages sends Access-Control-Allow-Origin * on a public static site (accepted, QA-93)
