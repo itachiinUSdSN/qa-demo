@@ -1,7 +1,7 @@
 """Throwaway app for r2test2's Part B CHECK (B3/B4). Never deployed: .github/workflows/plants.yml and
 tests/plants/ start it on 127.0.0.1 only. Standard library only, so the scanners see no new dependencies.
-  PLANT 1: no X-Content-Type-Options header (ZAP rule 10021).
-  PLANT 2: GET /api/orders answers without a token.
+  PLANT 1 (fixed): no X-Content-Type-Options header (ZAP rule 10021).
+  PLANT 2 (fixed): GET /api/orders answered without a token.
 Delete plants/, tests/plants/ and .github/workflows/plants.yml after the check."""
 import json
 import os
@@ -13,7 +13,7 @@ TOKEN = os.environ.get("PLANTS_TOKEN") or secrets.token_urlsafe(16)
 HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'",
     "X-Frame-Options": "DENY",
-    # PLANT 1: "X-Content-Type-Options: nosniff" is left out on purpose.
+    "X-Content-Type-Options": "nosniff",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Embedder-Policy": "require-corp",
@@ -44,8 +44,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in PAGES:
             return self.reply(200, PAGES[self.path], "text/html; charset=utf-8")
         if self.path == "/api/orders":
-            # PLANT 2: the sign-in check is missing on purpose. The fix is:
-            # if self.headers.get("Authorization") != f"Bearer {TOKEN}": return self.reply(401, b'{"detail": "sign in"}')
+            if self.headers.get("Authorization") != f"Bearer {TOKEN}":
+                return self.reply(401, b'{"detail": "sign in"}')
             return self.reply(200, json.dumps(ORDERS).encode())
         return self.reply(404, b'{"detail": "not found"}')
 
