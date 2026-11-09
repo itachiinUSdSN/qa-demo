@@ -5,3 +5,4 @@
 10055	IGNORE	CSP wildcard: comes from GitHub Pages' own headers, not this site (accepted, QA-91)
 10063	IGNORE	Permissions-Policy: GitHub Pages cannot set response headers (accepted, QA-97)
 10098	IGNORE	Cross-domain misconfiguration: GitHub Pages sends Access-Control-Allow-Origin * on a public static site (accepted, QA-93)
+90004	IGNORE	Cross-Origin-Embedder/Opener-Policy: GitHub Pages cannot set response headers (accepted, new in ZAP 2.17)

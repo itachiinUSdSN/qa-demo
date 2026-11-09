@@ -108,9 +108,7 @@ jobs:
         if: env.SCOPE == 'full' && env.STAGING_URL != ''
         run: |
           chmod 777 results/security
-          # Accepted risks: .zap/rules.tsv in the app repo (rule id, IGNORE, reason; tab-separated) switches those ZAP rules off.
-          cfg=(); if [ -f .zap/rules.tsv ]; then cp .zap/rules.tsv results/security/rules.tsv; cfg=(-c rules.tsv); fi
-          docker run --rm -v "$PWD/results/security:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$STAGING_URL" "${cfg[@]}" -J zap.json -I -m 3 || true
+          docker run --rm -v "$PWD/results/security:/zap/wrk:rw" "$ZAP_IMAGE" zap-baseline.py -t "$STAGING_URL" -J zap.json -I -m 3 || true
           [ -s results/security/zap.json ] && echo "zap-baseline ok" >> results/security/status.txt || echo "zap-baseline failed" >> results/security/status.txt
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -200,10 +198,12 @@ jobs:
                       add("trivy-config", m.get("ID"), res.get("Target"), (m.get("CauseMetadata") or {}).get("StartLine"),
                           m.get("Severity"), m.get("Title"))
           RISK = {"3": "high", "2": "medium", "1": "low", "0": "low"}
+          # Accepted ZAP risks: rule ids listed in .zap/rules.tsv (rule id, IGNORE, reason; tab-separated) are not reported.
+          accepted = {l.split("\t")[0].strip() for l in open(".zap/rules.tsv") if l.strip() and not l.startswith("#")} if os.path.exists(".zap/rules.tsv") else set()
           for site in (load(R + "zap.json") or {}).get("site", []):
               for a in site.get("alerts", []):
-                  if str(a.get("riskcode")) == "0":
-                      continue   # informational
+                  if str(a.get("riskcode")) == "0" or str(a.get("pluginid")) in accepted:
+                      continue   # informational, or an accepted risk
                   add("zap-baseline", a.get("pluginid"), "(staging)", None, RISK.get(str(a.get("riskcode")), "low"),
                       f"{a.get('name')} ({a.get('count', len(a.get('instances', [])))} URLs)")
           # One finding per app / tool / rule / file (the Jira fingerprint); keep the first line seen.
