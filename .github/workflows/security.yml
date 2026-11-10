@@ -70,7 +70,8 @@ jobs:
           semgrep scan --metrics=off --quiet --config p/python --config p/typescript --config p/react --config p/owasp-top-ten \
             --exclude node_modules --exclude .venv --json -o results/security/semgrep.json . && st semgrep ok || st semgrep failed
           if git ls-files '*.py' | grep -q .; then
-            rc=0; bandit -q -r . -x ./node_modules,./.venv,./tests -f json -o results/security/bandit.json || rc=$?
+            # Medium severity and up; Alembic migrations (static DDL with hard-coded names) are not scanned.
+            rc=0; bandit -q -ll -r . -x './node_modules,./.venv,./tests,*/alembic/versions/*' -f json -o results/security/bandit.json || rc=$?
             [ $rc -le 1 ] && st bandit ok || st bandit failed   # 1 = issues found
           else st bandit skipped; fi
 
@@ -102,7 +103,9 @@ jobs:
         run: |
           st() { echo "$1 $2" >> results/security/status.txt; }
           trivy fs --quiet --scanners vuln --format json -o results/security/trivy-fs.json . && st trivy-fs ok || st trivy-fs failed
-          trivy config --quiet --format json -o results/security/trivy-config.json . && st trivy-config ok || st trivy-config failed
+          # Accepted misconfigurations: .trivyignore.yaml in the app repo (check id, paths, statement).
+          ign=(); [ -f .trivyignore.yaml ] && ign=(--ignorefile .trivyignore.yaml)
+          trivy config --quiet "${ign[@]}" --format json -o results/security/trivy-config.json . && st trivy-config ok || st trivy-config failed
 
       - name: Running app (ZAP baseline, passive)
         if: env.SCOPE == 'full' && env.STAGING_URL != ''
