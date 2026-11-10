@@ -193,7 +193,7 @@ jobs:
               add("gitleaks", r.get("RuleID"), r.get("File"), r.get("StartLine"), "high", f"possible secret ({r.get('RuleID')})")
           for res in (load(R + "trivy-fs.json") or {}).get("Results", []):
               for v in res.get("Vulnerabilities") or []:
-                  add("trivy", v.get("VulnerabilityID"), res.get("Target"), None, v.get("Severity"),
+                  add("trivy-fs", v.get("VulnerabilityID"), res.get("Target"), None, v.get("Severity"),
                       f"{v.get('PkgName')} {v.get('InstalledVersion')}: {v.get('Title', '')}")
           for res in (load(R + "trivy-config.json") or {}).get("Results", []):
               for m in res.get("Misconfigurations") or []:
