@@ -110,7 +110,7 @@ jobs:
       #             LOAD_CAPACITY_URL, which must not be staging (it shares a box with other apps).
       - name: Set up k6
         if: hashFiles('tests/load/*.js') != '' && contains(fromJSON('["load", "capacity"]'), inputs.suite)
-        uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1.2.2
+        uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1.3.0
 
       - name: Load tests (k6)
         id: load
