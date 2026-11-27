@@ -2,7 +2,7 @@
 # Dependabot updates them.
 httpx==0.28.1
 pytest==9.2.0
-schemathesis==4.33.1
+schemathesis==4.34.2
 bandit==1.9.4
 pip-audit==2.10.1
 semgrep==1.184.0
